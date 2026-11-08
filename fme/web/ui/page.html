@@ -1,0 +1,989 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Forensic Media Extractor __RELEASE__</title>
+<style>{styles}</style>
+</head>
+<body>
+<a class="skiplink" href="#results-scroll" id="skip-gallery">Skip to the gallery</a>
+
+
+<div class="banner" id="core-warning" style="display:none;"></div>
+
+<!-- One bar across the top: the menu, where you are, what you do with the
+     case, and what is running. The title and version used to have a row of
+     their own above this, which spent a line of screen on something nobody
+     needs to read twice; the version is in the badge on the right. -->
+<!-- The ribbon. Seven tabs of what can be done, in the order the work
+     happens: the program and its settings, the case in hand, getting data
+     in, getting findings out, how the gallery looks, and the tools. The
+     workspace tabs it replaces are still there underneath -- the ribbon
+     switches to them rather than duplicating them. -->
+<div class="titlebar">
+  <span class="title">Forensic Media Extractor</span>
+  <span class="release" id="app-release"></span>
+  <span style="flex:1;"></span>
+  <span class="badge" id="job-badge" style="display:none;"></span>
+  <span class="badge" id="ver-badge" title=""></span>
+</div>
+
+<div class="screenhidden" id="screen-hidden" style="display:none;">
+  Screen hidden — every picture and video on this page is blurred
+  <span>· Ctrl-B to show · nothing has been changed</span>
+</div>
+
+<!-- Messages: bottom right, clear of the ribbon and the controls, with a
+     close button and the last few kept (v2026.11.320). It used to sit over
+     the ribbon for twelve seconds with nothing to press. -->
+<div class="toast" id="toast" style="display:none;" role="status" aria-live="polite">
+  <span id="toast-text"></span>
+  <span class="toast-acts">
+    <button class="secondary tiny" id="toast-history" title="The last messages shown">Earlier</button>
+    <button class="secondary tiny" id="toast-close" title="Close this message" aria-label="Close this message">✕</button>
+  </span>
+</div>
+<div class="toastlog" id="toast-log" style="display:none;" aria-label="Earlier messages"></div>
+
+<div class="ribbon">
+  <div class="ribbon-tabs" id="ribbon-tabs"></div>
+  <div class="ribbon-body">
+    <div class="ribbon-groups" id="ribbon-groups"></div>
+  </div>
+</div>
+
+<div class="tab-content active" id="tab-cases">
+  <div class="panel">
+    <div class="row" style="align-items:center;">
+      <h2 style="margin:0; flex:1;">Cases</h2>
+      <button class="secondary" id="cases-refresh">Refresh</button>
+      <button id="cases-new">New extraction</button>
+    </div>
+    <p class="hint">
+      Every case processed here. Opening one reads its manifest and its
+      review: nothing is carved or hashed again. The list records where the
+      output is, not a copy of it, so a case whose folder has moved is shown
+      as missing rather than offered.
+    </p>
+    <div class="row" style="margin-top:4px;">
+      <div style="flex:1;"><label>Find cases in a folder
+        <span class="hint">— also finds cases that have moved, and points
+        this list at where they are now</span></label>
+        <input type="text" id="cases-scan-path"
+               placeholder="a drive or folder holding past output"></div>
+      <button class="secondary" id="cases-scan-browse" style="align-self:flex-end;">Browse…</button>
+      <button class="secondary" id="cases-scan" style="align-self:flex-end;">Scan</button>
+    </div>
+    <div class="err" id="cases-err"></div>
+    <div id="cases-list"></div>
+    <p class="hint" id="cases-registry"></p>
+  </div>
+</div>
+
+<!-- The extraction form is the left column of the workspace, not a panel
+     of its own: filling it in and watching the gallery fill up is one
+     piece of work. v135 moved the workspace out of here and left this
+     empty, so "New extraction" opened a blank screen. The ribbon takes
+     you to the workspace and puts the cursor in the source box instead. -->
+
+<!-- The case under review has a workspace of its own. It used to
+     live inside the extraction panel, so opening the hash store or
+     anything else hid the case and there was no way back to it
+     short of opening it again. -->
+<div class="tab-content" id="tab-review">
+<div class="wrap" id="wrap">
+  <div class="panel sticky" id="controls-col">
+    <h2>Image</h2>
+    <div class="row">
+      <div style="flex:1;">
+        <input type="text" id="path" placeholder="image file, folder, or /dev/sdb1">
+      </div>
+      <button class="secondary" id="btn-browse">Browse…</button>
+    </div>
+    <div class="row" style="margin-top:6px;">
+      <button class="secondary" id="btn-sources" style="flex:1;">Attached drives and folders…</button>
+    </div>
+    <div id="sources-box" style="display:none;"></div>
+    <div class="row" style="margin-top:8px;">
+      <button class="secondary" id="btn-load">Load / Inspect</button>
+      <button id="btn-use" style="display:none;">Use This Image</button>
+      <button class="secondary" id="btn-change" style="display:none;">Change</button>
+      <span class="status" id="load-state">No image loaded</span>
+    </div>
+    <div id="load-info" class="loadbox" style="display:none;"></div>
+    <div id="accepted" class="accepted" style="display:none;"></div>
+
+    <label style="margin-top:14px;">Results folder</label>
+    <div class="row">
+      <div style="flex:1;">
+        <input type="text" id="out-root" placeholder="where results are written">
+      </div>
+      <button class="secondary" id="btn-out-browse">Browse…</button>
+    </div>
+    <p class="hint" id="out-space"></p>
+    <p class="hint" id="containers"></p>
+
+    <h2 style="margin-top:18px;">Options</h2>
+    <label>Engines</label>
+    <select id="mode">
+      <option value="both">File system + carving</option>
+      <option value="fs">File system only</option>
+      <option value="carve">Carving only</option>
+    </select>
+    <label style="margin-top:10px;">Case number
+      <span class="hint" style="display:inline;">— fill this in and the run
+      writes ProjectVIC.json and the LAVA set for you</span></label>
+    <input type="text" id="case-number" placeholder="DC26-253">
+    <div class="row" style="margin-top:6px;">
+      <div style="flex:1;"><label>Examiner</label>
+        <input type="text" id="case-examiner" placeholder="J. Smith"></div>
+      <div style="flex:1;"><label>Evidence item</label>
+        <input type="text" id="case-evidence" placeholder="1TB WD"></div>
+    </div>
+    <div style="margin-top:8px;">
+      <label class="inline"><input type="checkbox" id="auto-vic" checked> Write ProjectVIC.json (Griffeye)</label>
+      <label class="inline"><input type="checkbox" id="auto-lava" checked> Write a LAVA output set</label>
+    </div>
+
+    <label style="margin-top:10px;">Encrypted volumes
+      <span class="hint" style="display:inline;">— BitLocker or FileVault. Used
+      for this run only: never saved to the case, the log or a report.</span></label>
+    <input type="password" id="unlock-password" autocomplete="new-password"
+           placeholder="password, recovery password or recovery key">
+    <input type="text" id="unlock-keyfile" style="margin-top:6px;"
+           placeholder="BitLocker startup key (.BEK) file, full path">
+    <p class="hint" style="margin-top:4px;">The report says which volume was
+      opened and with what kind of key. Resuming the run asks for it again.</p>
+
+    <label style="margin-top:10px;">Parallel workers</label>
+    <select id="workers">
+      <option value="auto">Auto — one per core, less one</option>
+      <option value="1">1 (single process)</option>
+      <option value="2">2</option>
+      <option value="4">4</option>
+      <option value="8">8</option>
+    </select>
+    <p class="hint" id="workers-hint" style="margin-top:4px;"></p>
+
+    <label style="margin-top:10px;">Carve alignment</label>
+    <select id="align">
+      <option value="1">Every byte (recommended — finds embedded media)</option>
+      <option value="512">512-byte sectors (faster, skips embedded media)</option>
+      <option value="4096">4096-byte clusters (fastest, skips the most)</option>
+    </select>
+    <p class="hint" style="margin-top:4px;">
+      Sector alignment only looks at candidates on a boundary. That is quicker
+      and quieter, but a picture inside a document, or base64 in a web cache,
+      is almost never on one.
+    </p>
+    <div style="margin-top:12px;">
+      <label class="inline"><input type="checkbox" id="images-only"> Images only</label>
+      <label class="inline"><input type="checkbox" id="videos-only"> Videos only</label>
+      <label class="inline"><input type="checkbox" id="use-stash" checked> Check against my own stash — what I graded in earlier cases</label>
+      <label class="inline"><input type="checkbox" id="hash-source" checked> Hash the source and check it against the acquisition's own hash
+        <span class="hint">reads the evidence once more, end to end, before the run</span></label>
+      <label class="inline"><input type="checkbox" id="find-members" checked> Read a RAID or LVM set with its other members from the same folder
+        <span class="hint">found by what each file records about itself, never by its name; the report lists every file used</span></label>
+      <label class="inline"><input type="checkbox" id="databases" checked> Extract media from SQLite databases</label>
+      <label class="inline"><input type="checkbox" id="scan-inside"> Look inside compound files (documents, zips, EXIF thumbnails)</label>
+      <label class="inline"><input type="checkbox" id="opt-artifacts" checked>
+        Also keep the archives, databases, plists and PDFs the media came out of
+        — on, because without them a finished case cannot be opened up again:
+        the containers are in the evidence rather than in the case, and
+        "look inside these" means carving the whole image a second time. A disk
+        holds far more of these than it
+        holds pictures</label>
+      <label class="inline"><input type="checkbox" id="carve-files"> Folder scan: look inside non-media files</label>
+      <label class="inline"><input type="checkbox" id="no-deleted"> Skip deleted entries</label>
+      <label class="inline"><input type="checkbox" id="include-system"> Include NTFS $ system files</label>
+    </div>
+
+    <p class="hint" id="sig-inline-hint" style="margin-top:14px;"></p>
+
+    <div class="row" style="margin-top:14px;">
+      <button id="btn-start">Start Extraction</button>
+      <button class="secondary" id="btn-cancel" style="display:none;">Cancel</button>
+    </div>
+    <div class="progress-outer"><div class="progress-inner" id="bar"></div></div>
+    <p class="hint" id="status-counts" style="margin:4px 0 0; display:none;"></p>
+    <div class="status" id="status" aria-live="polite">Idle.</div>
+    <p class="hint">File systems read here: <span id="caps">checking…</span></p>
+    <div id="finished" class="finished" style="display:none;"></div>
+    <div class="err" id="err"></div>
+    <p class="hint">
+      The image is opened read-only and never modified. Recovered files are
+      written under <code>media_out/</code> next to this script, with a
+      manifest recording MD5, SHA-256 and provenance for each one.
+    </p>
+  </div>
+
+  <div class="panel results" id="results-col">
+    <!-- Reviewing a finished case, the extraction form and the export panels
+         step aside and this one line stands for them, so the tiles start at
+         the top of the screen instead of below three panels of settings. -->
+    <div id="review-strip" class="reviewstrip">
+      <span class="hint" id="review-source"></span>
+      <span style="flex:1;"></span>
+      <button class="secondary small" id="review-settings" aria-expanded="false">Show extraction settings</button>
+      <button class="secondary small" id="review-panels" aria-expanded="false">Project VIC &amp; C4All panels</button>
+      <button class="secondary small" id="review-new">New extraction</button>
+    </div>
+    <!-- Asked once, the first time a case is reviewed on this machine
+         (v2026.11.320, U8): how pictures are shown is the examiner's choice
+         to make knowingly, not a setting found later in a menu. A card, not
+         a dialog, so it stops nothing: grading keys and clicks still work. -->
+    <div id="wellbeing-card" class="wellbeingcard" style="display:none;" role="region"
+         aria-labelledby="wellbeing-title">
+      <strong id="wellbeing-title">How should pictures be shown?</strong>
+      <span class="row" style="display:inline-flex;flex-wrap:wrap;gap:4px 12px;margin:0 0 0 8px;">
+        <label class="ctl"><input type="radio" name="wb" value="ungraded" checked>
+          Blur what is not yet graded (recommended)</label>
+        <label class="ctl"><input type="radio" name="wb" value="graded"> the most serious categories</label>
+        <label class="ctl"><input type="radio" name="wb" value="all"> every picture</label>
+        <label class="ctl"><input type="radio" name="wb" value="none"> nothing</label>
+        <label class="ctl"><input type="checkbox" id="wb-gray"> in grey</label>
+        <button class="secondary small" id="wellbeing-ok">Use this</button>
+      </span>
+      <span class="hint" style="display:block;margin:2px 0 0;">Changeable any time on
+        the Display tab; hover a tile or hold B to see one clearly; Ctrl-B hides the screen.</span>
+    </div>
+    <div class="summary" id="summary" style="display:none;" tabindex="0"
+         title="Click to show or hide the whole run summary"></div>
+    <div class="toolbar">
+      <span class="chip active" data-filter="all">All</span>
+      <span class="chip" data-filter="image">Images</span>
+      <span class="chip" data-filter="video">Videos</span>
+      <span class="chip" data-filter="deleted">Deleted</span>
+      <span class="chip" data-filter="carve">Carved</span>
+      <span class="chip" data-filter="database">In databases</span>
+      <span class="chip" data-filter="folder">From folder</span>
+      <span class="chip" data-filter="embedded">Embedded</span>
+      <span class="chip" data-filter="gps">Has GPS</span>
+      <span class="chip" id="chip-stack"
+            title="Show one tile per group of files that look alike, rather than every one of them. Grading that tile grades the whole group.">Stack similar</span>
+      <span class="chip" id="chip-nsrl"
+            title="Leave out files whose hash is in a known-software list. A hit means the file is known, not that it is irrelevant — it is a lead about what to look at first, nothing more.">Hide known software</span>
+      <span class="chip" id="chip-containers"
+            title="Show the archives, databases and caches that other media came out of. They are in the manifest and the reports either way.">Show containers</span>
+      <span class="chip" data-filter="auto" title="Categorized by a hash set rather than by an examiner">Set by a hash set</span>
+      <span class="chip" data-filter="needs-review" title="Everything a person has not looked at, including what a hash set categorized">Not yet reviewed</span>
+      <label for="search" class="visually-hidden">Search the case</label>
+      <input type="search" id="search" placeholder="Search name, path, hash…"
+             title="Matches the file name, the path it came from, any of the
+three hashes, the camera, and your note. Prefix with md5:, sha1:, sha256:,
+path:, name:, cam: or note: to search one field only."
+             style="width:220px; padding:3px 8px; font-size:11px;">
+      <span class="hint" id="search-count"></span>
+      <span class="hint" id="cat-selected"></span>
+      <span class="hint" id="sel-count"></span>
+      <span id="sel-actions" style="display:none; gap:5px; align-items:center;">
+        <span class="chip" id="sel-all">Select all matching</span>
+        <span class="chip" id="sel-page">Select this page</span>
+        <span class="chip" id="sel-clear">Clear</span>
+      </span>
+      <span class="ctl">Per page
+        <select id="per-page">
+          <option>200</option><option selected>500</option>
+          <option>1500</option><option>5000</option>
+          <option value="0">all</option>
+        </select>
+        <span class="hint" id="page-capped" style="display:none;"></span></span>
+      <span class="ctl">Tile size
+        <input type="range" id="tile-size" min="90" max="420" step="10" value="170">
+      </span>
+      <span class="ctl">Time zone
+        <select id="tz-select"></select></span>
+      <label class="ctl" title="Blur the pictures. Which categories are
+blurred is set beside it; hover a tile, or press B, to see one clearly.">
+        <input type="checkbox" id="blur-on"> Blur</label>
+      <select id="blur-scope" style="width:auto; padding:3px 8px; font-size:11px;">
+        <option value="graded">the categories ticked in Display options</option>
+        <option value="all">every image</option>
+        <option value="ungraded">anything not yet graded</option>
+      </select>
+      <label class="ctl" title="Show every picture and video in grey, as
+Griffeye's wellness view does: colour carries much of what makes material
+hard to look at. How it is shown only; the files are untouched.">
+        <input type="checkbox" id="gray-on"> Grayscale</label>
+      <label class="ctl" title="A page stays as it was built while you grade
+it, so tiles do not shift under the cursor. Turn it off to have files leave
+the page as soon as they no longer match the filter.">
+        <input type="checkbox" id="hold-page" checked> Hold the page</label>
+      <span class="hint" id="save-state" style="align-self:center;"></span>
+      <span style="flex:1;"></span>
+      <span class="chip active moved-to-ribbon" data-view="gallery">Gallery</span>
+      <span class="chip moved-to-ribbon" data-view="table">Table</span>
+      <span class="chip moved-to-ribbon" id="btn-refresh" title="Re-read this run's results without restarting anything">↻ Refresh</span>
+      <span class="chip moved-to-ribbon" id="btn-undo" title="Take back the last grading (Ctrl-Z)">↶ Undo</span>
+      <span class="chip moved-to-ribbon" id="btn-pane" title="Show or hide the side pane">Side pane</span>
+      <a id="manifest-link" style="display:none; font-size:12px;"
+         title="This tool's own record of the run. Not a Project VIC file — Griffeye will not read it.">manifest.csv (internal record)</a>
+    </div>
+    <div id="vic-box" class="exportbox" style="display:none;">
+      <div class="row" style="align-items:center;">
+        <strong style="font-size:12px;">Project VIC</strong>
+        <span style="flex:1;"></span>
+        <span class="chip" id="vic-toggle" style="padding:2px 8px;">show</span>
+      </div>
+      <div id="vic-panel" style="display:none; margin-top:10px;">
+        <p class="hint" style="margin-top:0;">
+          Point at a VICS <code>.json</code>. If its media sits beside it, the
+          files are imported as their own job. If it is a hash set, the
+          recovered files from this job are checked against it — the set
+          decides the category, nothing here classifies anything.
+        </p>
+        <div class="row">
+          <div style="flex:1;"><label>VICS JSON file</label>
+            <input type="text" id="vic-path" placeholder="/cases/VIC_US_2026.json"></div>
+          <button class="secondary" id="vic-browse" style="align-self:flex-end;">Browse…</button>
+        </div>
+        <div class="row" style="margin-top:8px;">
+          <button id="vic-match">Check this job against the set</button>
+          <button class="secondary" id="vic-import">Import its media</button>
+        </div>
+        <div class="err" id="vic-err"></div>
+        <div id="vic-result" class="loadbox" style="display:none;"></div>
+      </div>
+    </div>
+
+    <div id="export-box" class="exportbox" style="display:none;">
+      <div class="row" style="align-items:center;">
+        <strong style="font-size:12px;">Export for Griffeye / C4All</strong>
+        <span style="flex:1;"></span>
+        <span class="chip" id="export-toggle" style="padding:2px 8px;">show</span>
+      </div>
+      <div id="export-panel" style="display:none; margin-top:10px;">
+        <p class="hint" style="margin-top:0;">
+          Writes the C4All report set — <code>C4M_Index.xml</code>,
+          <code>C4P_Index.xml</code>, <code>Case_Report.xml</code>,
+          <code>Victim_Report.xml</code>, <code>Results.txt</code> — with the
+          recovered files renamed and batched into DVD folders. Files are
+          hard-linked, so this costs no extra disk space.
+        </p>
+        <div class="row">
+          <div style="flex:1;"><label>Case number</label>
+            <input type="text" id="exp-case" placeholder="DC23-282"></div>
+          <div style="flex:1;"><label>Analyst</label>
+            <input type="text" id="exp-analyst" placeholder="J. Smith"></div>
+        </div>
+        <div class="row" style="margin-top:6px;">
+          <div style="flex:1;"><label>Evidence item (appears in fullpath)</label>
+            <input type="text" id="exp-evidence" placeholder="1TB WD from inside HP 20 AIO"></div>
+          <div style="width:150px;"><label>Batch size</label>
+            <select id="exp-media">
+              <option value="dvd">DVD (4.3 GB)</option>
+              <option value="dvd-dl">DVD DL (8.5 GB)</option>
+              <option value="cd">CD (700 MB)</option>
+              <option value="bd">Blu-ray (25 GB)</option>
+              <option value="none">One folder, no batching</option>
+            </select></div>
+        </div>
+        <div class="row" style="margin-top:6px;">
+          <div style="flex:1;"><label>Comment</label>
+            <input type="text" id="exp-comment" placeholder="optional note for the case report"></div>
+          <div style="flex:1;"><label>Organization (Project VIC)</label>
+            <input type="text" id="exp-org" placeholder="Anytown PD"></div>
+        </div>
+        <div class="row" style="margin-top:8px; align-items:center; gap:14px;">
+          <button id="btn-export">Write Report Set</button>
+          <label class="inline"><input type="checkbox" id="exp-vic" checked> Also write ProjectVIC.json (VICS 2.0)</label>
+          <label class="inline"><input type="checkbox" id="exp-lava"> Also write a LAVA output set (LEAPP viewer)</label>
+          <label class="inline"><input type="checkbox" id="exp-lava-abs"> LAVA: absolute media paths (try if previews are blank)</label>
+          <label class="inline"><input type="checkbox" id="exp-vic-hash"> Stage VIC files by MD5 (Cellebrite layout)</label>
+          <label class="inline"><input type="checkbox" id="exp-copy"> Copy files instead of hard-linking</label>
+          <label class="inline"><input type="checkbox" id="exp-all-movies"> Everything in C4M_Index (no picture index)</label>
+        </div>
+        <div class="err" id="export-err"></div>
+        <div id="export-result" class="loadbox" style="display:none;"></div>
+      </div>
+      <div class="row" style="align-items:center; margin-top:10px;">
+        <strong style="font-size:12px;">Do more with this case</strong>
+        <span style="flex:1;"></span>
+        <span class="chip" id="reprocess-toggle" style="padding:2px 8px;">show</span>
+      </div>
+      <div id="reprocess-panel" style="display:none; margin-top:10px;">
+        <p class="hint" style="margin-top:0;">
+          Runs over what this case already recovered, without reading the
+          evidence again. Nothing already in the case is removed and no
+          decision is changed; each run is written to the case's audit log.
+        </p>
+        <div class="row" style="align-items:center; gap:14px;">
+          <button id="reprocess-expand" data-reason="expand-containers">Look inside recovered archives and documents</button>
+          <button class="secondary" id="reprocess-thumbs" data-reason="rebuild-thumbs">Rebuild gallery tiles</button>
+        </div>
+        <div class="err" id="reprocess-err"></div>
+        <div id="reprocess-result" class="loadbox" style="display:none;"></div>
+      </div>
+    </div>
+
+    <div id="cat-bar" class="catfilter"></div>
+    <div id="results-scroll" class="resultsscroll">
+    <div id="gallery" class="gallery"></div>
+    <div id="pager" class="pager" style="display:none;"></div>
+    <div id="table" class="table-wrap" style="display:none;">
+      <table>
+        <thead><tr><th>File</th><th>Type</th><th>Size</th><th>Engine</th><th>Source</th><th>SHA-256</th><th></th></tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+    <p class="hint" id="empty">Nothing extracted yet.</p>
+    </div>
+    <div id="active-filters" class="activefilters" style="display:none;"></div>
+  </div>
+
+  <div class="panel sticky" id="details-col" style="display:none;">
+    <div class="row" style="align-items:flex-end; gap:0; margin-bottom:0;
+         border-bottom:1px solid var(--border); padding-bottom:0;">
+      <div class="panetabs" id="pane-tabs">
+        <button class="panetab active" id="btn-details">Details</button>
+        <button class="panetab" id="btn-classify">Classification</button>
+        <button class="panetab" id="btn-filters">Filters</button>
+      </div>
+      <span class="chip" id="details-close" title="Close this pane"
+            style="padding:2px 9px; margin-left:auto;">✕</span>
+    </div>
+    <div id="details" class="details" style="padding-top:10px;"></div>
+    <div id="classify" class="details" style="display:none;"></div>
+    <div id="filters" class="details" style="display:none;"></div>
+  </div>
+</div>
+</div>
+<div class="tab-content" id="tab-hashes">
+  <div class="panel">
+    <h2>Hash sets</h2>
+
+    <!-- Three things happen here, in the order they are done: connect to the
+         store, check this case against it, add this case to it. They used to
+         be interleaved with the similarity tools, which belong to reviewing
+         rather than to hashes, and examiners could not tell which control
+         did what. -->
+    <div class="section">1 &nbsp;Connect to the hash store</div>
+    <p class="hint" style="margin-top:0;">
+      A store holds every hash set you have imported and is kept between
+      cases. It is either a file on this machine, or a server your unit
+      shares — a server needs the token you were issued and, for a lab
+      certificate, a copy of that certificate.
+    </p>
+    <div class="row">
+      <div style="flex:2;"><label>Store — a file, or a server address</label>
+        <input type="text" id="store-path"
+               placeholder="D:\hashes\hash_store.db   or   https://LABSERVER2025:8787"></div>
+      <button class="secondary" id="store-browse" style="align-self:flex-end;">Browse…</button>
+    </div>
+    <div class="row" id="store-server-fields" style="margin-top:6px;">
+      <div style="flex:1;"><label>Token <span class="hint">for a server; kept
+        for this session only, never written to disk</span></label>
+        <input type="password" id="store-token"
+               placeholder="paste the token you were issued"></div>
+      <div style="flex:1;"><label>Certificate <span class="hint">the
+        server.crt your administrator gave you</span></label>
+        <input type="text" id="store-cert"
+               placeholder="C:\hashstore\server.crt"></div>
+      <button class="secondary" id="store-cert-browse" style="align-self:flex-end;">Browse…</button>
+    </div>
+    <div class="row" style="margin-top:4px; align-items:center;">
+      <label class="inline" style="margin:0;">
+        <input type="checkbox" id="store-remember" checked> Remember the
+        token on this machine, and connect at startup</label>
+      <span class="hint">On, so the store is simply there each morning: the
+        token is written to a file this Windows account can read, and anyone
+        who can read it can use the store as you. Turn it off on a machine
+        others log into, and you will paste the token once per session
+        instead.</span>
+      <button class="secondary" id="store-forget" style="align-self:center;">Forget</button>
+    </div>
+    <div class="row" style="margin-top:8px; align-items:center;">
+      <button id="store-open">Use this store</button>
+      <button class="secondary" id="store-verify">Verify</button>
+      <span class="badge" id="store-state">not connected</span>
+    </div>
+    <div class="err" id="store-err"></div>
+    <div id="store-list"></div>
+
+    <div class="row" style="margin-top:10px;">
+      <div style="flex:1;"><label>Add a hash set to this store
+        <span class="hint">imported once; every case from now on is checked
+        against it</span></label>
+        <input type="text" id="store-import"
+               placeholder="VIC_US_2026.json, NSRLFile.txt, RDS.db, or your own list"></div>
+      <button class="secondary" id="store-import-browse" style="align-self:flex-end;">Browse…</button>
+      <button class="secondary" id="store-inspect" style="align-self:flex-end;">What is this file?</button>
+      <button id="store-import-go" style="align-self:flex-end;">Import</button>
+    </div>
+
+    <hr style="border:none; border-top:1px solid var(--border); margin:18px 0;">
+
+    <div class="section">2 &nbsp;Check this case against the store</div>
+    <p class="hint" style="margin-top:0;">
+      Needs a case open: a finished run, or one opened from the Cases list. A Project VIC
+      match carries the category that set recorded; an NSRL match means known
+      software, which is usually a reason to set a file aside rather than
+      examine it. Nothing here decides what a match means.
+    </p>
+    <div class="row">
+      <button id="store-scan">Check this case against the store</button>
+    </div>
+    <div id="store-result" class="loadbox" style="display:none;"></div>
+
+    <p class="hint" style="margin-top:12px;">
+      <strong>A set for this session only</strong> — loaded here, used for
+      checking, and gone when the program closes. For a set you will use
+      again, import it into the store above instead.
+    </p>
+    <div class="row">
+      <div style="flex:1;"><label>Hash set file</label>
+        <input type="text" id="hash-path"
+               placeholder="VIC_US_2026.json, NSRLFile.txt, RDS.db, or your own list"></div>
+      <button class="secondary" id="hash-browse" style="align-self:flex-end;">Browse…</button>
+      <button class="secondary" id="hash-add" style="align-self:flex-end;">Load</button>
+    </div>
+    <div class="err" id="hash-err"></div>
+    <div id="hash-list"></div>
+    <div class="row" style="margin-top:8px;">
+      <button class="secondary" id="hash-scan">Check this case against the loaded sets</button>
+    </div>
+    <div id="hash-result" class="loadbox" style="display:none;"></div>
+
+    <hr style="border:none; border-top:1px solid var(--border); margin:18px 0;">
+
+    <div class="section">3 &nbsp;Add this case to the store</div>
+    <p class="hint" style="margin-top:0;">
+      Sends the hashes of the files you have categorized, with the category
+      you gave them, so the next case meets them already known. Only graded
+      files are sent, and only hashes and labels — never a picture, and never
+      the file itself.
+    </p>
+    <div class="row">
+      <button class="secondary" id="store-contribute">Add this case's graded files to the store</button>
+    </div>
+  </div>
+</div>
+
+<div class="tab-content" id="tab-similar">
+  <div class="panel">
+    <h2>Similar media</h2>
+    <p class="hint" style="margin-top:0;">
+      Three ways of relating files to each other that a hash cannot: a hash
+      changes completely when one pixel does. All of these need a finished
+      run, and they write their results into the case.
+    </p>
+
+    <div class="section">Visually similar images</div>
+    <p class="hint" style="margin-top:0;">
+      Groups pictures that look alike even when their bytes differ — a
+      re-saved JPEG, a resized copy, a screenshot of the same image.
+      Similar is a judgment, not a fact: the distance is shown for every
+      match so you can see how close it really is.
+    </p>
+    <div id="sim-unavailable" class="hint" style="display:none; color:var(--warn);"></div>
+    <div id="sim-controls" class="row" style="display:none; align-items:flex-end;">
+      <div style="width:220px;">
+        <label>How alike (bits of difference)</label>
+        <select id="sim-distance">
+          <option value="4">4 — near identical</option>
+          <option value="8" selected>8 — recommended</option>
+          <option value="12">12 — looser</option>
+          <option value="16">16 — loosest, expect stray matches</option>
+        </select>
+      </div>
+      <button id="sim-scan">Find similar images</button>
+    </div>
+
+    <div class="section">Stills and the videos they came from</div>
+    <p class="hint" style="margin-top:0;">
+      A picture and the video it was taken from share no bytes, so no hash
+      relates them — but a frame of that video and the picture are the same
+      image. This hashes each video's key frames and matches the stills
+      against them, so a screenshot finds its source, and a video shows what
+      was taken from it. Needs Pillow and OpenCV.
+    </p>
+    <div class="row">
+      <button class="secondary" id="frames-match">Match stills to videos</button>
+    </div>
+
+    <div class="section">Screening <span class="hint">to decide what to look
+      at first</span></div>
+    <p class="hint" style="margin-top:0;">
+      Measures how much of each picture sits in a broad skin-tone color band,
+      and counts faces where OpenCV is installed. This is arithmetic over
+      pixels, <strong>not a nudity classifier</strong>: sand, wood and a
+      close-up of a face score high, a clothed subject and a dark photograph
+      score low, and nothing is categorized by it. It adds two filters so a
+      backlog can be worked in a useful order.
+    </p>
+    <div class="row">
+      <button class="secondary" id="screen-scan">Score the images in this run</button>
+    </div>
+
+    <div class="err" id="sim-err"></div>
+    <div id="sim-result" class="loadbox" style="display:none;"></div>
+  </div>
+</div>
+
+<div class="tab-content" id="tab-sigs">
+  <div style="padding:16px;">
+  <div class="panel">
+    <p class="hint" style="margin-top:0;">
+      Point this at one or more local sample files of a format the built-in
+      list doesn't cover, and it computes the byte pattern the carver can
+      match on. Give <strong>multiple</strong> samples of the same type when
+      possible — the "common to all samples" row is far more reliable than
+      trusting one file's header/footer, since a single sample can include
+      bytes that vary between files (timestamps, random IDs, etc).
+    </p>
+
+    <label style="margin-top:14px;">Local sample file paths (one per box)</label>
+    <div id="sig-path-rows"></div>
+    <div class="row" style="margin-top:8px;">
+      <button class="secondary" id="btn-add-path-row">+ Add file</button>
+      <button id="btn-analyze-sigs">Analyze</button>
+    </div>
+    <div class="err" id="sig-analyze-error"></div>
+
+    <div id="sig-analyze-results" style="display:none; margin-top:18px;">
+      <h2>Per-file bytes</h2>
+      <div class="table-wrap" style="max-height:220px;">
+        <table>
+          <thead><tr><th>File</th><th>Size</th><th>Header (hex / ascii)</th>
+                     <th>Footer (hex / ascii)</th></tr></thead>
+          <tbody id="sig-sample-rows"></tbody>
+        </table>
+      </div>
+
+      <h2 style="margin-top:18px;">Detected signature (editable)</h2>
+      <div class="hint" style="margin-top:0;" id="sig-common-count"></div>
+      <label style="margin-top:10px;">Extension (e.g. "cr3", "dat")</label>
+      <input type="text" id="sig-ext" placeholder="cr3">
+      <label style="margin-top:8px;">Header bytes (hex)</label>
+      <input type="text" id="sig-header-hex">
+      <label style="margin-top:8px;">Footer bytes (hex) — optional, leave blank if none/unknown</label>
+      <input type="text" id="sig-footer-hex">
+      <label style="margin-top:8px;">Max recovered size (bytes) — safety cap used if no footer match is found</label>
+      <input type="text" id="sig-max-size" value="67108864">
+      <div class="row" style="margin-top:10px;">
+        <button id="btn-save-sig">Add Signature</button>
+      </div>
+      <div class="err" id="sig-save-error"></div>
+    </div>
+
+    <h2 style="margin-top:22px;">Active custom signatures for this session</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Ext</th><th>Header</th><th>Footer</th><th>Max size</th><th></th></tr></thead>
+        <tbody id="sig-active-rows"></tbody>
+      </table>
+    </div>
+    <p class="hint" id="sig-usage"></p>
+  </div>
+  </div>
+</div>
+
+<div id="ctx" class="ctxmenu" style="display:none;"></div>
+<div id="mainmenu" class="ctxmenu" style="display:none;"></div>
+
+<!-- Handing somebody the files is a different act from describing them,
+     so it has a dialog of its own rather than a tick box in the report. -->
+<div class="modal-overlay" id="display-modal">
+  <div class="modal" style="max-width:520px;">
+    <div class="modal-head"><span>How the gallery looks</span>
+      <button class="secondary" id="display-close" style="padding:3px 9px;">✕</button></div>
+    <div style="padding:12px 16px 16px;" id="display-body">
+      <p class="hint" style="margin-top:0;">These change what you see. None
+        of them changes a file, a grading or a report.</p>
+      <div id="blur-cats-box" class="display-row">
+        <div class="hint" style="margin:0 0 4px;">Blurred when the blur is set to
+          the categories ticked here (this case's scheme):</div>
+        <div id="blur-cats" class="blurcats"></div>
+      </div>
+      <!-- The controls themselves are moved in here when the page loads,
+           so they keep the handlers and the ids the rest of the program
+           already uses. Rebuilding them here would have meant two of
+           each, and the second one quietly not working. -->
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="map-modal">
+  <div class="modal" style="width:min(1200px,96vw);max-width:none;height:88vh;display:flex;flex-direction:column;">
+    <div class="modal-head"><span>Case map</span>
+      <span class="hint" id="map-info" style="flex:1;margin:0 12px;"></span>
+      <button class="secondary" id="map-close" style="padding:3px 9px;">✕</button></div>
+    <div id="case-map" style="flex:1;min-height:300px;position:relative;"></div>
+    <div class="hint" id="map-foot" style="padding:6px 12px;">
+      Drawn from the offline basemap imported under Settings; nothing is
+      fetched from the internet. A point is where a file's own metadata says
+      it was taken — not where the device was, and not a verified location.</div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="logo-modal">
+  <div class="modal" style="max-width:560px;">
+    <div class="modal-head"><span>Agency logo</span>
+      <button class="secondary" id="logo-close" style="padding:3px 9px;">✕</button></div>
+    <div style="padding:12px 16px 16px;">
+      <p class="hint" style="margin-top:0;">Put on the header of every report
+        this machine writes, unless a case sets its own. A PNG or JPEG.</p>
+      <div class="row">
+        <div style="flex:1;"><label>Image file</label>
+          <input type="text" id="logo-path" placeholder="C:\\unit\\logo.png"></div>
+        <button class="secondary" id="logo-browse" style="align-self:flex-end;">Browse…</button>
+        <button id="logo-save" style="align-self:flex-end;">Use this</button>
+      </div>
+      <p class="hint" id="logo-state" style="margin-top:8px;"></p>
+      <div id="logo-preview" style="margin-top:6px;"></div>
+      <div class="err" id="logo-err"></div>
+      <div class="row" style="margin-top:10px;">
+        <button class="secondary" id="logo-clear">Remove the logo</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="settings-modal">
+  <div class="modal" style="max-width:620px;">
+    <div class="modal-head"><span>Settings</span>
+      <button class="secondary" id="settings-close" style="padding:3px 9px;">✕</button></div>
+    <div style="padding:12px 16px 16px;">
+      <p class="hint" style="margin-top:0;">What this machine remembers, so
+        it is typed once rather than into every case.</p>
+      <div class="row">
+        <div style="flex:1;"><label>Examiner</label>
+          <input type="text" id="set-examiner" placeholder="Det. A. Example"></div>
+        <div style="flex:1;"><label>Agency</label>
+          <input type="text" id="set-agency" placeholder="County DA — CID"></div>
+      </div>
+      <div class="row" style="margin-top:6px;">
+        <div style="flex:1;"><label>Where output goes by default</label>
+          <input type="text" id="set-output" placeholder="D:\cases"></div>
+      </div>
+      <div class="row" style="margin-top:6px;">
+        <div style="flex:1;"><label>Grading scheme for new cases
+          <span class="hint">a case keeps the scheme it was made under</span></label>
+          <select id="set-region"></select></div>
+      </div>
+      <p class="hint" id="set-region-state" style="margin:4px 0 0;"></p>
+      <div class="row" style="margin-top:6px;">
+        <div style="flex:1;"><label>Image model for searching by content
+          <span class="hint">an ONNX model; leave blank for the bundled
+          DINOv2-small</span></label>
+          <input type="text" id="set-model" placeholder="C:\\models\\dinov2_small.onnx"></div>
+        <button class="secondary" id="set-model-browse" style="align-self:flex-end;">Browse…</button>
+      </div>
+      <p class="hint" id="set-model-state" style="margin:4px 0 0;"></p>
+      <div class="row" style="margin-top:6px;">
+        <div style="flex:1;"><label>Offline basemap for maps
+          <span class="hint">a .pmtiles or .mbtiles file; it is copied in and
+          hashed, and nothing is fetched from the internet</span></label>
+          <input type="text" id="set-basemap" placeholder="D:\maps\region.pmtiles"></div>
+        <button class="secondary" id="set-basemap-import" style="align-self:flex-end;">Import</button>
+      </div>
+      <p class="hint" id="set-basemap-state" style="margin:4px 0 0;"></p>
+      <p class="hint" id="set-token" style="margin-top:10px;"></p>
+      <p class="hint">Kept in <span class="p" id="set-where"></span></p>
+      <div class="err" id="set-err"></div>
+      <div class="row" style="margin-top:10px;">
+        <button id="set-save">Save</button>
+        <button class="secondary" id="set-forget">Forget everything this
+          machine remembers</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="export-modal">
+  <div class="modal" style="max-width:720px;">
+    <div class="modal-head"><span>Export the files themselves</span>
+      <button class="secondary" id="export-close" style="padding:3px 9px;">✕</button></div>
+    <div style="padding:12px 16px 16px; max-height:74vh; overflow-y:auto;">
+      <p class="hint" style="margin-top:0;">Copies the recovered files into a
+        folder, one per category. Every copy is hashed as it is written and
+        checked against the hash recorded when it was carved, and a manifest
+        of what was written goes in beside them.</p>
+      <div class="row">
+        <div style="flex:1;"><label>Folder to write into
+          <span class="hint">must not exist yet, or be empty</span></label>
+          <input type="text" id="xf-dest" placeholder="D:\exports\DC25-450"></div>
+        <button class="secondary" id="xf-browse" style="align-self:flex-end;">Browse…</button>
+      </div>
+      <div class="section">Categories</div>
+      <div class="row" id="xf-categories" style="flex-wrap:wrap;"></div>
+      <div class="row" style="margin-top:8px;">
+        <label class="inline"><input type="checkbox" id="xf-bycat" checked>
+          A folder per category</label>
+        <label class="inline"><input type="checkbox" id="xf-bykind" checked>
+          Images and videos apart <span class="hint">as a submission to
+          NCMEC is asked for</span></label>
+        <label class="inline"><input type="checkbox" id="xf-thumbs">
+          Thumbnails as well</label>
+      </div>
+      <div class="err" id="xf-err"></div>
+      <div id="xf-result" class="loadbox" style="display:none;"></div>
+      <div class="row" style="margin-top:10px;">
+        <button id="xf-go">Export</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="report-modal">
+  <div class="modal" style="max-width:720px;">
+    <div class="modal-head"><span>Export report</span>
+      <button class="secondary" id="report-close" style="padding:3px 9px;">✕</button></div>
+    <div style="padding:12px 16px 16px; max-height:74vh; overflow-y:auto;">
+      <div class="section">Who it is from</div>
+      <div class="row">
+        <div style="flex:1;"><label>Agency</label>
+          <input type="text" id="rp-agency" placeholder="Delaware County DA — CID"></div>
+        <div style="flex:1;"><label>Examiner</label>
+          <input type="text" id="rp-examiner"></div>
+      </div>
+      <div class="row">
+        <div style="flex:1;"><label>Case number</label>
+          <input type="text" id="rp-case"></div>
+        <div style="flex:1;"><label>Evidence item</label>
+          <input type="text" id="rp-evidence"></div>
+      </div>
+      <div><label>Title</label>
+        <input type="text" id="rp-title" placeholder="Recovered media report"></div>
+      <div><label>Notes for the header</label>
+        <textarea id="rp-notes" rows="2"></textarea></div>
+
+      <div class="section">What it covers</div>
+      <select id="rp-scope">
+        <option value="all">Everything in this run</option>
+        <option value="filter">What the current filters show</option>
+        <option value="selection">The files selected in the gallery</option>
+        <option value="graded">Categorized files only</option>
+        <option value="categories">Only the categories I choose</option>
+      </select>
+      <p class="hint" id="rp-scope-note" style="margin:4px 0 0;"></p>
+
+      <!-- Which categories go in. A report sent on to somebody else has no
+           business carrying the Non-Pertinent files, and an examiner should
+           not have to delete them afterwards. -->
+      <div id="rp-categories" style="display:none; margin-top:8px;">
+        <div class="section" style="margin-top:0;">Categories to include</div>
+        <div id="rp-category-list" class="row" style="flex-wrap:wrap;"></div>
+        <p class="hint" style="margin:4px 0 0;">The files, their thumbnails
+          and every count in the report cover only these. The front page says
+          which were chosen.</p>
+      </div>
+
+      <div class="section">Images</div>
+      <label class="inline"><input type="checkbox" id="rp-thumbs" checked>
+        Include thumbnails</label>
+      <label class="inline"><input type="checkbox" id="rp-blur">
+        Blur them — reviewable over a shoulder, <strong>not safe to
+        disclose</strong>: the image is still in the file</label>
+      <label class="inline"><input type="checkbox" id="rp-full">
+        Copy the files beside the report and link them</label>
+      <p class="hint">Turning thumbnails off writes a report with no picture
+        of any file in it, and says so in the header — which is what a report
+        going to someone who must not be shown the material needs.</p>
+
+      <div class="section">Layout</div>
+      <label class="inline"><input type="checkbox" id="rp-byflag">
+        A section per flag</label>
+      <div><label>Columns</label>
+        <div id="rp-fields" class="fieldgrid"></div></div>
+
+      <div class="section">Formats</div>
+      <div class="fieldgrid" id="rp-formats">
+        <label class="inline"><input type="checkbox" value="html" checked> HTML report</label>
+        <label class="inline"><input type="checkbox" value="protocol" checked>
+          Protocol (.docx) <span class="hint">the hand-over report</span></label>
+        <label class="inline"><input type="checkbox" value="docx"> Word, plain (.docx)</label>
+        <label class="inline"><input type="checkbox" value="pdf"> PDF</label>
+        <label class="inline"><input type="checkbox" value="csv" checked> CSV</label>
+        <label class="inline"><input type="checkbox" value="json"> JSON</label>
+        <label class="inline"><input type="checkbox" value="md5"> MD5 list</label>
+        <label class="inline"><input type="checkbox" value="kml"> KML of geolocated media</label>
+        <label class="inline"><input type="checkbox" value="projectvic"> Project VIC</label>
+      </div>
+
+      <div class="row" style="margin-top:8px;">
+        <div style="flex:1;"><label>Write to</label>
+          <input type="text" id="rp-dest" placeholder="a folder for the report"></div>
+        <button class="secondary" id="rp-browse" style="align-self:flex-end;">Browse…</button>
+        <button id="rp-go" style="align-self:flex-end;">Write report</button>
+      </div>
+      <div class="hint warn" id="rp-warn"></div>
+      <div class="err" id="rp-err"></div>
+      <div id="rp-result" class="loadbox" style="display:none;"></div>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="hex-modal">
+  <div class="modal" style="max-width:860px;">
+    <div class="modal-head"><span id="hex-title">Hex view</span>
+      <button class="secondary" id="hex-close" style="padding:3px 9px;">✕</button></div>
+    <div style="padding:10px 16px;">
+      <div class="row" style="align-items:center; gap:8px;">
+        <button class="secondary" id="hex-prev">◀ back</button>
+        <span class="hint" id="hex-where"></span>
+        <button class="secondary" id="hex-next">forward ▶</button>
+      </div>
+      <pre id="hex-body" class="hexdump"></pre>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="story-modal">
+  <div class="modal" style="width:min(1200px,96vw); max-width:none;">
+    <div class="modal-head"><span id="story-title">Storyboard</span>
+      <button class="secondary" id="story-close" style="padding:3px 9px;">✕</button></div>
+    <div id="story-grid" class="storygrid"></div>
+    <div class="zoomhint">Frames evenly spaced through the clip, decoded from the
+      stored file for viewing; click one to play from there.</div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="full-modal">
+  <div class="modal" style="max-width:96vw; width:auto;">
+    <div class="modal-head">
+      <button class="secondary" id="full-prev" title="Previous file (←)" aria-label="Previous file">‹</button>
+      <span id="full-title">Full size</span>
+      <button class="secondary" id="full-next" title="Next file (→)" aria-label="Next file">›</button>
+      <span id="full-grade" class="fullgrade" aria-live="polite"></span>
+      <span id="full-confirm" class="fullconfirm" aria-live="polite"></span>
+      <span class="zoombar">
+        <button class="secondary" id="zoom-out" title="Zoom out (−)">−</button>
+        <span id="zoom-level">fit</span>
+        <button class="secondary" id="zoom-in" title="Zoom in (+)">+</button>
+        <button class="secondary" id="zoom-fit" title="Fit the window (0, unless 0 grades in this case)">Fit</button>
+        <button class="secondary" id="zoom-actual" title="Actual size (1, unless 1 grades in this case)">1:1</button>
+        <button class="secondary" id="mask-draw" title="Cover part of the picture: drag a box over it. Kept with the case and shown wherever the picture is; never applied to the file, an export or a report (M)">Mask</button>
+        <button class="secondary" id="mask-clear" title="Take every mask off this picture">Unmask</button>
+      </span>
+      <button class="secondary" id="full-close" style="padding:3px 9px;">✕</button></div>
+    <div id="full-body" class="fullbody"></div>
+    <div class="zoomhint">Scroll to zoom where the pointer is · drag to move ·
+      + − to zoom · 0 fits · 1 is actual size · Ctrl-B blurs</div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="browse-modal">
+  <div class="modal">
+    <div class="modal-head"><span id="browse-title">Choose an image file</span>
+      <button class="secondary" id="browse-close" style="padding:3px 9px;">✕</button></div>
+    <div class="row" style="padding:10px 16px 0;">
+      <button class="secondary" id="browse-up" style="padding:6px 10px;">↑</button>
+      <input type="text" id="browse-path" readonly>
+    </div>
+    <div id="browse-roots" style="padding:8px 16px 0; display:flex; gap:6px;
+         flex-wrap:wrap;"></div>
+    <div class="modal-list" id="browse-list"></div>
+    <div class="modal-foot">
+      <span class="hint" id="browse-sel" style="margin:0;">No file selected.</span>
+      <span>
+        <button class="secondary" id="browse-pick-dir">Use this folder</button>
+        <button id="browse-pick" disabled>Select file</button>
+      </span>
+    </div>
+  </div>
+</div>
+
+<script>{script}</script>
+</body>
+</html>

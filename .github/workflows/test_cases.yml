@@ -1,0 +1,71 @@
+name: Test Cases
+
+# Runs every test script under tests/ on Linux. This is the baseline job: does
+# the code still do what the tests say it does.
+#
+# Each script runs in its own interpreter (tests/runner.py says why); pytest
+# collects them through tests/conftest.py, one test per script. The same
+# suite runs without pytest as `python tests/runner.py`.
+#
+# FME_TESTS_STRICT=1: a test that cannot run for want of a library fails here
+# rather than passing. A known-answer test that quietly skipped is the gap
+# this job exists to close. Lines where a script says it did not check
+# something are listed in the warnings summary (-rw).
+#
+# pytsk3 and libewf-python are installed from requirements.txt, so the
+# cross-checks that say "not checked: The Sleuth Kit is not installed" on a
+# machine without them run here. Both build from source on Linux; the
+# runner has the compiler they need.
+#
+# The pull_request trigger carries no paths: filter, so this check always
+# reports and can be made required.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.9 is the floor pyproject.toml claims; 3.12 what the lab runs.
+        python-version: ['3.9', '3.12']
+    env:
+      FME_TESTS_STRICT: '1'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install pytest python-docx pypdf playwright
+
+      # Kept separate, as pyproject.toml's vm extra is: a build failure in
+      # one of these should not stop the rest of the suite running.
+      - name: Install virtual-disk readers (optional)
+        continue-on-error: true
+        run: python -m pip install -r requirements-vm.txt
+
+      - name: Install the browser test_browser.py drives
+        run: python -m playwright install --with-deps chromium
+
+      - name: The vendored readers are what vendored.json records
+        run: python tests/test_vendor.py
+
+      - name: Run test suite
+        run: python -m pytest tests -v -rw
