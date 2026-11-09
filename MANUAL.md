@@ -729,7 +729,7 @@ put while the tiles scroll.
 from the list, the gallery takes the screen: the settings column and the
 Project VIC and C4All panels step aside behind one line — **Show extraction
 settings**, **Project VIC & C4All panels**, **New extraction** — and the run
-summary shrinks to one line (click it for the rest). The pane on the right
+summary shrinks to its first line, with a **Run summary** button for the rest. The pane on the right
 stays where it is from the start, at 1280 pixels wide too, so picking the
 first file does not move every tile.
 

@@ -4,6 +4,83 @@ The release number is in `VERSION` and is reported by both GUIs, the console
 banner, and the Project VIC and LAVA exports, so a report can be traced back
 to the build that produced it.
 
+## v2026.11.324 — The Filters pane of a large case
+
+Reported against a case of 221,592 files: the Filters pane took "forever" to
+fill, and grading a whole page did not move on to the next page.
+
+- **The pane worked out every file's metadata values again on every count**,
+  and counted again after every grading while it was open -- several seconds of
+  server time each time on that case, during which the page's own requests (the
+  next page of files after a grading among them) waited for the interpreter.
+  A file's metadata does not change when it is graded, so its values are now
+  worked out once per file list and time zone and kept; a count after a grading
+  reads them (3.6 s, then 0.35 s, for 221,592 files on the test machine). The
+  values are worked out in the background as soon as a large case's first page
+  is asked for, so the pane is usually ready when it is opened. Capture-time
+  years are read with the standard library's ISO parser first, which is most of
+  the cold time saved. (`galleryquery.facet_table`, `galleryquery.warm`;
+  `tests/test_filters_speed.py`)
+- Grading a whole page and moving on is now checked in a browser, held whole
+  and paged from the server, at 10 and at 500 files a page
+  (`tests/test_bulk_grade_advances.py`). It moves on in both; the case it was
+  reported against could not be reproduced here at full size, so if it still
+  stays put with the Filters pane closed, that is a different cause.
+
+## v2026.11.323 — The run summary, folded, shows its first line
+
+With a case open, the run summary is folded to its first line so the tiles
+start near the top. It was folded by clipping the whole summary to one line's
+height -- and the results column, a flex box with its overflow hidden, was free
+to shrink it further. In a window of ordinary height it showed as half a line of
+cut-off text; in a short one, as nothing at all. Measured: 19 pixels tall at
+720, 0 at 430. Nothing said there was more, and clicking a strip that could not
+be seen was the only way to it.
+
+The summary is now its first line ("221,592 file(s) -- …") and a **Run summary**
+button; the rest opens below it and closes again. Nothing above the tiles in the
+results column shrinks any more (`flex: none`); only the tiles scroll.
+`tests/test_review_layout.py` checks the first line is whole at 720 and at 430
+pixels, and that the button opens and closes the rest.
+
+In a large case the Filters pane said only "Counting…" while the server counted
+every file's values, which can take a minute for two hundred thousand files and
+read as stuck. It now says how many files it is counting and that the gallery
+works meanwhile.
+
+## v2026.11.322 — What the suite found with The Sleuth Kit installed
+
+The GitHub test run installs pytsk3, libewf-python and pycryptodome from
+requirements.txt; the machine the suite had been run on had none of them. Four
+tests failed there. Two were defects in the program, two in the tests.
+
+**The program:**
+
+- **A volume inside LVM or an unlocked LUKS volume was not read when TSK was
+  installed.** The vendored reader is asked only for the file systems TSK does
+  not read, and ext4 is one TSK reads -- but the pytsk3 on PyPI opens neither
+  LVM nor LUKS, so TSK never saw those volumes and nothing read them. With the
+  passphrase given, a LUKS volume's ext4 came back with no files; the five
+  logical volumes of an LVM group were reported "not opened". A volume the
+  vendored reader finds inside a container (`lvm_`, `luks_`, `md_`) is now read
+  by it whatever its kind (`vendor_fs.inside_container`).
+- **An ext4 volume TSK read in full, holding no pictures, was reported as one
+  "this program could not read".** The check counted only the vendored reader's
+  volumes as explained; it now counts TSK's too.
+
+**The tests:**
+
+- `test_evidence_hash` wrapped the E01's reader assuming the vendored reader;
+  where libewf is installed it opens that E01 first. The wrapper now passes
+  everything through.
+- `test_filevault_locked` compared the unlocked FileVault volume's files by a
+  path without the volume's name (`docs/readme.txt` against
+  `CONVVOL/docs/readme.txt`). Without pycryptodome that check was skipped, so it
+  had never run. The decryption was right.
+
+Each of the four now passes with pytsk3 and pycryptodome installed and with
+`FME_NO_TSK=1`.
+
 ## v2026.11.321 — Released under the MIT License
 
 FME is now released under the MIT License (`LICENSE`), Copyright (c) 2026
