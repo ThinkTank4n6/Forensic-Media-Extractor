@@ -1,0 +1,13 @@
+# Minimum install: the GUIs and the carving engine, nothing that compiles.
+#
+#   pip install -r requirements-minimal.txt
+#
+# Use this when pytsk3 or libewf will not build on the machine in front of
+# you. What still works: both GUIs, carving raw/dd and split raw images, the
+# FAT32 file system walk through fat32_core, SQLite blob extraction, custom
+# signatures, and every export format.
+#
+# What does not: .E01 images, and file system support beyond FAT32. Add those
+# later with the full requirements.txt - nothing needs reinstalling.
+flask>=3.0
+werkzeug>=3.0

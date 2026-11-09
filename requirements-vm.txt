@@ -1,0 +1,14 @@
+# Virtual machine disk image support. Optional, and separate because pip
+# aborts an entire install on the first package that fails to build.
+#
+#   pip install -r requirements-vm.txt
+#
+# Install only the format you actually handle. Distribution names are
+# lib*-python; the modules they provide are py*. If a source build fails,
+# prebuilt binaries are published at https://github.com/libyal/<name>/releases
+#
+# If none of these are installed, export the VM disk to raw first - the
+# carving and file system engines do not care how the image was produced.
+libvmdk-python>=20221124    # VMDK     -> pyvmdk
+libvhdi-python>=20221124    # VHD/VHDX -> pyvhdi
+libqcow-python>=20221124    # QCOW2    -> pyqcow

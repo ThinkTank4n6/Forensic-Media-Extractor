@@ -1,0 +1,79 @@
+name: Windows Smoke Test
+
+# FME is used on Windows: the examiners' machines and the hash store server
+# run it there. Development and the main job run on Linux, so without this
+# job the platform the tool is used on is the one platform nothing tests.
+#
+# In increasing strength: every module imports (a POSIX-only name, a
+# conditional import that resolves on one OS and not the other); the program
+# starts and reports itself; then the whole suite, which is where path
+# separators, drive letters and text encoding go wrong -- and reading a file
+# with the wrong encoding returns bad data rather than an error.
+#
+# --prefer-binary keeps this job failing on FME's code rather than on a C
+# extension that has a wheel for Windows but would otherwise build from
+# source.
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-smoke:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    env:
+      FME_TESTS_STRICT: '1'
+      PYTHONIOENCODING: utf-8
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --prefer-binary -r requirements.txt
+          python -m pip install --prefer-binary pytest python-docx pypdf playwright
+
+      - name: Install virtual-disk readers (optional)
+        continue-on-error: true
+        run: python -m pip install --prefer-binary -r requirements-vm.txt
+
+      - name: Install the browser test_browser.py drives
+        run: python -m playwright install chromium
+
+      - name: Import every fme module on Windows
+        shell: python
+        run: |
+          import importlib, pathlib, sys, traceback
+          sys.path.insert(0, ".")
+          failed = []
+          for path in sorted(pathlib.Path("fme").rglob("*.py")):
+              if "vendor" in path.parts:
+                  continue
+              name = ".".join(path.with_suffix("").parts)
+              if name.endswith("__main__"):
+                  continue
+              try:
+                  importlib.import_module(name.removesuffix(".__init__"))
+              except Exception:
+                  failed.append(name)
+                  traceback.print_exc()
+          print(f"{len(failed)} module(s) failed to import: {failed}")
+          sys.exit(1 if failed else 0)
+
+      - name: The program starts and reports itself
+        run: |
+          python launch.py version
+          python launch.py doctor
+
+      - name: Run test suite on Windows
+        run: python -m pytest tests -v -rw

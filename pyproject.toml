@@ -1,0 +1,84 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "forensic-media-extractor"
+version = "2026.11.324"
+description = "Recover images, video and audio from forensic images, devices, folders, packages and databases, and export for review platforms"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+keywords = ["forensics", "dfir", "carving", "project-vic", "lava"]
+authors = [{name = "Christopher A. Tankelewicz (ThinkTank4n6)"}]
+classifiers = ["License :: OSI Approved :: MIT License"]
+
+# Only Flask is required: the browser interface will not start without it.
+# Everything else is optional and the code says what is missing rather than
+# failing, so a minimal install still carves, hashes and reports.
+dependencies = [
+    "flask>=3.0",
+    "werkzeug>=3.0",
+]
+
+[project.optional-dependencies]
+# What an examiner's machine usually wants.
+full = [
+    "pytsk3>=20230125",        # exFAT, NTFS, HFS+, APFS, ext2/3/4
+    "libewf-python>=20231119", # EnCase E01/Ex01
+    "pillow>=10.0",            # visual similarity, report thumbnails
+    "py7zr>=0.20",             # media inside 7z archives
+    "waitress>=2.1",           # threaded server, no development warning
+    "zstandard>=0.22",         # Snapchat LZC content bundles
+    "opencv-python-headless>=4.8",  # frames from videos a browser cannot play
+    "pillow-heif>=0.16",       # HEIC photographs, which iPhones write
+    "pywebview>=5.0; platform_system == 'Windows' or platform_system == 'Darwin'",  # a window of its own
+    "cryptography>=42.0",      # making a certificate for a shared hash store
+    "cheroot>=10.0",           # serving that store over TLS, threaded
+    "reportlab>=4.0",          # writing PDF reports directly
+    "numpy>=1.24",             # fast MPEG-TS carving; OpenCV features
+    "pycryptodome>=3.19",      # encrypted E01/AFF, BitLocker (vendored readers)
+    "argon2-cffi>=23.1",       # LUKS2 Argon2 keyslots
+    "texture2ddecoder>=1.0",   # iOS GPU textures (ASTC/ETC/PVRTC), isolated
+    "pyliblzfse>=0.4.1",       # the LZFSE most iOS textures are packed with
+]
+# Virtual machine disk formats, kept separate because a build failure in one
+# of these should not stop the rest installing.
+vm = [
+    "libvmdk-python>=20221124",
+    "libvhdi-python>=20221124",
+    "libqcow-python>=20221124",
+]
+build = ["pyinstaller>=6.0"]
+
+[project.scripts]
+fme = "fme.cli:run"
+
+# Everything under fme/vendor/ ships: the readers, their licences and the
+# provenance record. Leaving a licence out of a build would breach the terms
+# the code is used under.
+#
+# One table. It was declared twice, which is not valid TOML: pip could not
+# read this file, so `pip install .` -- which the README and the manual
+# give -- failed before it began. And the interface's page (fme/web/ui:
+# page.html, styles.css, app.js, assembled at import) was in neither, so an
+# installed copy would have started a GUI with no page to serve.
+[tool.setuptools.package-data]
+fme = ["vendor/*.py", "vendor/LICENSE-*", "vendor/vendored.json", "VERSION",
+       "models/*.onnx", "models/LICENSE-*", "models/README.md"]
+"fme.web" = ["ui/*.html", "ui/*.css", "ui/*.js",
+             "ui/maps/*", "ui/maps/fonts/*", "ui/maps/fonts/*/*",
+             "ui/maps/sprites/v4/*"]
+
+[tool.setuptools.packages.find]
+include = ["fme*"]
+
+# The test scripts are collected by tests/conftest.py, one test each, run in
+# its own interpreter (see tests/runner.py for why). pytest's own collector
+# must never import them -- most call sys.exit at import -- so it is given a
+# pattern no file matches.
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["pytest_never_collects_*.py"]
+norecursedirs = ["fixtures", "support", "__pycache__"]
+addopts = "-ra"

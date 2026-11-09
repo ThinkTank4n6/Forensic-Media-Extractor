@@ -1,0 +1,11 @@
+# A real BitLocker volume (AES-XTS-128), written by Windows BitLocker -- not built by this project.
+# From the LEAPP cores' raw image fixtures, as carried in the comparison tool's tests/fixtures
+# (2026.5.7), MIT -- fme/vendor/LICENSE-gleapp. Its key or passphrase was
+# made for the fixture and opens nothing else.
+#
+# The expected answer, from how it was made: one BitLocker volume, locked; it opens with its startup key,
+# bitlocker-xts128.BEK beside this file (made for the fixture; it opens nothing else), and holds a
+# SquashFS file system -- tests/test_unlock.py.
+# Without its key (this program does not ask for one) a run must say the
+# volume is BitLocker-encrypted and locked, and that this is not an empty
+# disk -- tests/test_real_encrypted_volumes.py.
