@@ -787,6 +787,20 @@ class HashStore:
         self._con.commit()
         return breakdown
 
+    def known_breakdown(self, name: str):
+        """The breakdown if it is already kept, else None -- never counted
+        here. A page asks this; counting 200 million hashes by category is
+        minutes, and done inside a page request it left the admin's Hash
+        sets page spinning (v2026.11.325)."""
+        row = self._con.execute(
+            "SELECT kind, categories FROM sources WHERE name=?", (name,)).fetchone()
+        if row is None or row["kind"] == "case" or not row["categories"]:
+            return None
+        try:
+            return json.loads(row["categories"])
+        except (TypeError, ValueError):
+            return None
+
     def category_breakdown(self, name: str) -> dict:
         """{"records": {...}, "hashes": {...}} for one source, keyed by
         category as a string ("none" for no category).
@@ -1754,7 +1768,14 @@ def main(argv=None) -> int:
                   f"{src['hashes']:>12,}  {src['added_at'][:10]}")
         return 0
 
-    store = HashStore(args.store)
+    # Only an import makes a new store. Anything else -- --list above all --
+    # made an empty file at a mistyped path and reported "Total: 0", which
+    # reads as the store having lost its sets (v2026.11.325: hahses.db).
+    try:
+        store = HashStore(args.store, create=bool(args.import_path))
+    except StoreMissing as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
     try:
         if args.region:
             print(f"Scheme : {store.set_region(args.region)}")

@@ -26,6 +26,7 @@ import hashlib
 import json
 import logging
 import os
+import threading
 import shutil
 import socket
 import sqlite3
@@ -211,6 +212,38 @@ check("the activity record carries the counts by category",
       any(f"1 Child Abuse Material (CAM): {expected_records['1']}" in d
           for d in activity),
       next((d for d in activity if "VIC" in d or "vic" in d), ""))
+
+# A set imported before its breakdown was kept: the page does not count it
+# while the admin waits (v2026.11.325 -- 216 million NSRL hashes left the
+# Hash sets page spinning). It says so, counts in the background, and keeps it.
+held = app.config["STORE"]
+held._con.execute("UPDATE sources SET categories=NULL WHERE name='NSRL test'")
+held._con.commit()
+real_breakdown = held.category_breakdown
+slow = threading.Event()
+
+
+def slow_breakdown(name):
+    slow.wait(10)
+    return real_breakdown(name)
+
+
+held.category_breakdown = slow_breakdown
+started = time.time()
+page = client.get("/admin/sources").get_data(as_text=True)
+check("the page answers at once while an old set is counted",
+      time.time() - started < 5 and "Being counted by category" in page,
+      round(time.time() - started, 1))
+slow.set()
+for _ in range(100):
+    if held.known_breakdown("NSRL test"):
+        break
+    time.sleep(0.1)
+held.category_breakdown = real_breakdown
+page = client.get("/admin/sources").get_data(as_text=True)
+check("and once counted, it is kept and shown",
+      held.known_breakdown("NSRL test") is not None
+      and "Being counted by category" not in page)
 app.config["STORE"].close()
 app.config["ACCOUNTS"].close()
 

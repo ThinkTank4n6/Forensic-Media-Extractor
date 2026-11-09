@@ -4,6 +4,22 @@ The release number is in `VERSION` and is reported by both GUIs, the console
 banner, and the Project VIC and LAVA exports, so a report can be traced back
 to the build that produced it.
 
+## v2026.11.325 — The hash server's Hash sets page, on a large store
+
+- **The Hash sets page spun and never loaded** on a store of 367 million
+  hashes. For each NSRL and Project VIC set it shows a count by category, and
+  for a set imported before that count was kept it worked the count out inside
+  the page request: a GROUP BY over the set's rows -- 216 million for the
+  NSRL -- while the administrator waited. It now shows what is already kept,
+  counts a set that has none on a thread of its own, says "Being counted by
+  category for the first time", and reloads itself every minute until the
+  count is kept. It is counted once. (`HashStore.known_breakdown`;
+  `tests/test_hashset_import_categories.py`)
+- **`--list` on a mistyped store path made an empty store there** and reported
+  "Total: 0 hash(es)", which reads as a store that lost its sets. Only an import
+  makes a new store now; anything else says "There is no hash store at …" and
+  names any store in the same folder.
+
 ## v2026.11.324 — The Filters pane of a large case
 
 Reported against a case of 221,592 files: the Filters pane took "forever" to

@@ -1383,6 +1383,27 @@ def build_app(store_path: str, accounts_path: str = "",
         job["thread"].start()
         return ""
 
+    counting: set = set()
+    counting_lock = threading.Lock()
+
+    def _count_in_background(name: str) -> None:
+        """Count one set by category on a thread of its own, once."""
+        with counting_lock:
+            if name in counting:
+                return
+            counting.add(name)
+
+        def work():
+            try:
+                store.category_breakdown(name)     # counts, and keeps it
+            except Exception as exc:  # noqa: BLE001 - shown as not counted yet
+                print(f"could not count {name} by category: {exc}", file=sys.stderr)
+            finally:
+                with counting_lock:
+                    counting.discard(name)
+        threading.Thread(target=work, daemon=True,
+                         name=f"count-{name[:20]}").start()
+
     @app.route("/admin/sources", methods=["GET", "POST"])
     def admin_sources():
         from flask import Response, request as _request
@@ -1434,6 +1455,7 @@ def build_app(store_path: str, accounts_path: str = "",
 
         sources = store.sources()
         rows, detail = "", ""
+        counting_now = False
         for src in sources:
             rows += (
                 f"<tr><td>{_e(src['name'])}</td><td>{_e(src['kind'])}</td>"
@@ -1452,15 +1474,28 @@ def build_app(store_path: str, accounts_path: str = "",
                 f"<input type='hidden' name='name' value='{_e(src['name'])}'>"
                 f"<button class='quiet'>remove</button></form></td></tr>")
             if src["kind"] in ("nsrl", "projectvic"):
+                label = 'NSRL' if src['kind'] == 'nsrl' else 'Project VIC'
                 try:
-                    table = _breakdown_table(
-                        store.category_breakdown(src["name"]), src["kind"])
+                    known = store.known_breakdown(src["name"])
                 except (ValueError, sqlite3.Error):
-                    table = ""
+                    known = None
+                if known is None:
+                    # A set imported before its breakdown was kept is counted
+                    # once, in the background, and kept; the page says so and
+                    # does not wait for it.
+                    _count_in_background(src["name"])
+                    detail += (f"<h3>{_e(src['name'])} <span class='hint'>{label}"
+                               f"</span></h3><p class='hint'>Being counted by "
+                               f"category for the first time ({src['hashes']:,} "
+                               f"hashes). That takes minutes for a large set; "
+                               f"reload this page later. It is counted once and "
+                               f"kept.</p>")
+                    counting_now = True
+                    continue
+                table = _breakdown_table(known, src["kind"])
                 if table:
                     detail += (f"<h3>{_e(src['name'])} <span class='hint'>"
-                               f"{'NSRL' if src['kind'] == 'nsrl' else 'Project VIC'}"
-                               f"</span></h3>{table}")
+                               f"{label}</span></h3>{table}")
         body = (
             message +
             "<p class='hint'>Each path is read <b>on this machine</b>. A "
@@ -1496,7 +1531,7 @@ def build_app(store_path: str, accounts_path: str = "",
                 "a SHA-1 and a SHA-256). A set imported before this release "
                 "shows hashes only.</p>" + detail) if detail else ""))
         return Response(_page("Hash sets", body, person,
-                              refresh=3 if running else 0),
+                              refresh=3 if running else (60 if counting_now else 0)),
                         mimetype="text/html")
 
     @app.route("/admin/activity")
