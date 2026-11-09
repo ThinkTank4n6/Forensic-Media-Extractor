@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "forensic-media-extractor"
-version = "2026.11.325"
+version = "2026.11.327"
 description = "Recover images, video and audio from forensic images, devices, folders, packages and databases, and export for review platforms"
 readme = "README.md"
 requires-python = ">=3.9"

@@ -44,6 +44,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import collections
 import threading
 import traceback
 import uuid
@@ -2160,43 +2161,155 @@ def _make_thumb(out_dir: str, full: str, rel_path: str) -> bool:
 
 
 def _prefill_thumbs(job_id: str) -> None:
-    """Make the tiles before anybody scrolls to them.
+    """Make the tiles before anybody scrolls to them -- now on several
+    workers, with the page after the one on screen first (_Prefill)."""
+    _start_prefill(job_id)
 
-    Done on a thread at low priority after a run, because the first visit
-    to a gallery of a hundred thousand files is otherwise a hundred
-    thousand decodes spread across the examiner's scrolling. The work is
-    the same either way; doing it now means it is finished before it is
-    wanted.
-    """
-    # Lowered for this thread only, and only where that is what nice() does.
-    # On Linux it applies to the calling thread; on macOS and the BSDs to the
-    # whole process, so every run lowered the server itself -- the page,
-    # grading, the next run -- by ten more, until the program was restarted.
-    if sys.platform.startswith("linux"):
+
+# Making a case's tiles ahead of the examiner (v2026.11.326).
+#
+# One thread walked a case's files in order, and only after a run: a case
+# opened from the list got none made ahead at all, and a case of 221,592
+# files made each page's 500 tiles while the examiner waited for that page.
+# Now: several workers -- decoding and shrinking a picture is done in C,
+# outside the interpreter lock, so they do run side by side -- and a queue
+# ahead of the in-order sweep, which the gallery fills with the page after
+# the one on screen (`ahead`), so the next page is usually made before it is
+# asked for. A case opened from the list starts the same way as a run's.
+_PREFILLS: dict = {}
+_PREFILLS_LOCK = threading.Lock()
+PREFILL_AHEAD_MAX = 1500
+
+
+def _prefill_workers() -> int:
+    return max(2, min(6, (os.cpu_count() or 4) // 2))
+
+
+class _Prefill:
+    def __init__(self, job_id: str, out_dir: str, rels: list):
+        self.job_id, self.out_dir = job_id, out_dir
+        self.rels, self.index = rels, 0
+        self.ahead = collections.deque()
+        self.queued = set()
+        self.lock = threading.Lock()
+        self.made = 0
+        self.running = 0
+
+    def next_path(self):
+        with self.lock:
+            while self.ahead:
+                rel = self.ahead.popleft()
+                if rel not in self.queued:
+                    self.queued.add(rel)
+                    return rel
+            while self.index < len(self.rels):
+                rel = self.rels[self.index]
+                self.index += 1
+                if rel not in self.queued:
+                    self.queued.add(rel)
+                    return rel
+        return None
+
+    def want(self, rels) -> int:
+        """Put these first. What was ahead before goes: the examiner has
+        moved on, and the in-order sweep still reaches it."""
+        added = 0
+        with self.lock:
+            self.ahead.clear()
+            for rel in rels[:PREFILL_AHEAD_MAX]:
+                if rel and rel not in self.queued:
+                    self.ahead.append(rel)
+                    added += 1
+        return added
+
+    def work(self) -> None:
+        if sys.platform.startswith("linux"):
+            try:
+                os.nice(10)         # this thread only, on Linux
+            except OSError:
+                pass
         try:
-            os.nice(10)
-        except OSError:
-            pass
-    made = 0
+            while True:
+                with JOBS_LOCK:
+                    if self.job_id not in JOBS:      # the case was closed
+                        return
+                rel = self.next_path()
+                if rel is None:
+                    return
+                full = os.path.join(self.out_dir, rel)
+                if os.path.isfile(_thumb_path(self.out_dir, rel)):
+                    continue
+                if os.path.isfile(full) and _make_thumb(self.out_dir, full, rel):
+                    with self.lock:
+                        self.made += 1
+        finally:
+            with self.lock:
+                self.running -= 1
+                last = self.running == 0
+            if last:
+                if self.made:
+                    LOG.info("thumbnails ready for %d picture(s)", self.made)
+                with _PREFILLS_LOCK:
+                    if _PREFILLS.get(self.job_id) is self:
+                        _PREFILLS.pop(self.job_id, None)
+
+    def start(self, workers: int) -> None:
+        with self.lock:
+            self.running += workers
+        for n in range(workers):
+            threading.Thread(target=self.work, daemon=True,
+                             name=f"thumbs-{n}").start()
+
+
+def _start_prefill(job_id: str, force: bool = False, sweep: bool = True,
+                   ahead=None):
+    """The job's tile maker, started if it is not already running. With
+    sweep, every picture in the case, in order, after whatever is asked for
+    ahead; without, only what is asked for."""
     with JOBS_LOCK:
         job = JOBS.get(job_id)
-        files = list(job.get("files", [])) if job else []
-        out_dir = (job or {}).get("out_dir", "")
-    for entry in files:
-        with JOBS_LOCK:
-            if job_id not in JOBS:          # the case was closed
-                return
-        if entry.get("category") != "image":
-            continue
-        rel = entry.get("rel_path") or ""
-        full = os.path.join(out_dir, rel)
-        if rel and os.path.isfile(full) and _make_thumb(out_dir, full, rel):
-            made += 1
-    if made:
-        LOG.info("thumbnails ready for %d picture(s)", made)
+        if not job:
+            return None
+        rels = [e.get("rel_path") or "" for e in job.get("files", [])
+                if e.get("category") == "image" and e.get("rel_path")] \
+            if sweep else []
+        out_dir = job.get("out_dir", "")
+    with _PREFILLS_LOCK:
+        held = _PREFILLS.get(job_id)
+        if held is not None and not force:
+            return held
+        prefill = _Prefill(job_id, out_dir, rels)
+        if ahead:
+            prefill.want(ahead)
+        _PREFILLS[job_id] = prefill
+    prefill.start(_prefill_workers())
+    return prefill
 
 
-
+def _prefill_ahead(job_id: str, rels) -> None:
+    """The gallery's next page, made first. Starts the maker if it was not
+    running (a case opened before this release, or one whose sweep ended)."""
+    rels = [r for r in rels if r]
+    if not rels:
+        return
+    out_dir = ""
+    with JOBS_LOCK:
+        out_dir = (JOBS.get(job_id) or {}).get("out_dir", "")
+    missing = [r for r in rels if not os.path.isfile(_thumb_path(out_dir, r))]
+    if not missing:
+        return
+    with _PREFILLS_LOCK:
+        prefill = _PREFILLS.get(job_id)
+    if prefill is None or prefill.running == 0:
+        # Its sweep has finished (or never ran): this page's tiles only,
+        # rather than stat every picture in the case again.
+        _start_prefill(job_id, force=True, sweep=False, ahead=missing)
+        return
+    prefill.want(missing)
+    with prefill.lock:
+        idle = prefill.running == 0
+    if idle:                    # its workers ended while this was added
+        prefill.start(_prefill_workers())
 
 
 def _frame_matches_for(job_id: str, digest: str) -> list:

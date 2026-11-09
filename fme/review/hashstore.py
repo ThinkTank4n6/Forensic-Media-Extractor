@@ -422,10 +422,25 @@ class HashStore:
                 stored = self._con.execute(
                     "SELECT COUNT(*) AS n FROM hashes WHERE source_id=?",
                     (row["id"],)).fetchone()["n"]
-                self._con.execute(
-                    "UPDATE sources SET hash_count=? WHERE id=?",
-                    (stored, row["id"]))
-                self._con.commit()
+                # Remembered if it can be. A set being imported holds the
+                # store's one write lock between batches, and this write
+                # waiting for it was the admin page's "Internal Server
+                # Error" during an NSRL import (v2026.11.327). The count is
+                # still right; it is kept next time.
+                # Not waited for, either: a page asking is not worth the
+                # server's whole lock wait.
+                waited = self._con.execute("PRAGMA busy_timeout").fetchone()[0]
+                try:
+                    self._con.execute("PRAGMA busy_timeout=200")
+                    self._con.execute(
+                        "UPDATE sources SET hash_count=? WHERE id=?",
+                        (stored, row["id"]))
+                    self._con.commit()
+                except sqlite3.OperationalError:
+                    if self._con.in_transaction:
+                        self._con.rollback()
+                finally:
+                    self._con.execute(f"PRAGMA busy_timeout={int(waited)}")
             row["hashes"] = int(stored)
         return rows
 

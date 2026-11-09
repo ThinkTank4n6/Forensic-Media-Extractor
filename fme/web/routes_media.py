@@ -189,6 +189,11 @@ def api_gallery_query():
     answer.update(total=total, offset=offset, limit=limit)
     if "files" not in answer:
         answer["files"] = shown[offset:offset + limit]
+        # The page after this one, made first by the tile maker, so it is
+        # ready when the examiner gets there (v2026.11.326).
+        _prefill_ahead(job_id, [f.get("rel_path") for f in
+                                shown[offset + limit:offset + 2 * limit]
+                                if f.get("category") == "image"])
     if data.get("facets"):
         answer["facets"] = galleryquery.CACHE.facets(rows, decisions, version, raw, state)
     else:
@@ -253,6 +258,19 @@ def api_open_file():
     except (OSError, RuntimeError) as exc:
         return error_response(exc)
     return jsonify({"ok": True, "opened": full, "reveal": reveal})
+
+
+@app.route("/api/thumbs/ahead", methods=["POST"])
+def api_thumbs_ahead():
+    """The page after the one on screen, for the tile maker to do first --
+    asked by a gallery that holds its case whole and pages it itself."""
+    data = request.get_json(force=True) or {}
+    job_id = data.get("job", "")
+    with JOBS_LOCK:
+        if job_id not in JOBS:
+            return error_response(KeyError("Unknown job_id"), status=404)
+    _prefill_ahead(job_id, [str(r) for r in (data.get("files") or [])][:5000])
+    return jsonify({"ok": True})
 
 
 @app.route("/api/thumb")

@@ -1453,7 +1453,18 @@ def build_app(store_path: str, accounts_path: str = "",
                     "<input name='name' placeholder='name it (optional)'>"
                     f"<button>{button}</button></form>")
 
-        sources = store.sources()
+        importing = {j["name"] for j in recent if j["state"] == "running"}
+        try:
+            sources = store.sources()
+        except sqlite3.OperationalError as exc:
+            # The store's write lock is an import's while it writes a batch.
+            # Said, and tried again, rather than a bare 500 (v2026.11.327).
+            body = (message + "<div class='warn'>The store is busy writing an "
+                    f"import and could not be read just now ({_e(str(exc))}). "
+                    "This page tries again in a few seconds; the import "
+                    "carries on.</div>")
+            return Response(_page("Hash sets", body, person, refresh=5),
+                            mimetype="text/html")
         rows, detail = "", ""
         counting_now = False
         for src in sources:
@@ -1475,6 +1486,14 @@ def build_app(store_path: str, accounts_path: str = "",
                 f"<button class='quiet'>remove</button></form></td></tr>")
             if src["kind"] in ("nsrl", "projectvic"):
                 label = 'NSRL' if src['kind'] == 'nsrl' else 'Project VIC'
+                if src["name"] in importing:
+                    # Counted by the import itself when it finishes; counting
+                    # it now would keep a half-imported set's numbers.
+                    detail += (f"<h3>{_e(src['name'])} <span class='hint'>{label}"
+                               f"</span></h3><p class='hint'>Importing now "
+                               f"({src['hashes']:,} hashes so far). Its counts "
+                               f"by category are kept when it finishes.</p>")
+                    continue
                 try:
                     known = store.known_breakdown(src["name"])
                 except (ValueError, sqlite3.Error):

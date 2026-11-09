@@ -202,6 +202,9 @@ def api_cases_open():
                         entry["similar_group"] = row.get("group")
                         entry["similar_count"] = sizes.get(row.get("group"), 1)
 
+    # The tiles, made ahead from now on: a case opened from the list had
+    # every one made while the examiner waited for its page (v2026.11.326).
+    _start_prefill(job_id)
     book.touch(out_dir)
     book.refresh(out_dir)
     return jsonify({"ok": True, "job_id": job_id, "out_dir": out_dir,

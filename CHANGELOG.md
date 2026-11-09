@@ -4,6 +4,46 @@ The release number is in `VERSION` and is reported by both GUIs, the console
 banner, and the Project VIC and LAVA exports, so a report can be traced back
 to the build that produced it.
 
+## v2026.11.327 — The Hash sets page during an import
+
+- **The Hash sets page answered "Internal Server Error" while an NSRL was
+  importing.** An import holds the store's one write lock while it writes each
+  batch. The page counted any set whose size had never been kept and wrote the
+  count back -- and the new set, before its first batch, was such a set. The
+  write waited the server's full 15-second lock wait and failed. The count is
+  now shown without being kept when the store is busy, and the page does not
+  wait more than a moment for it; if the store cannot be read at all, the page
+  says the store is busy with an import and tries again. Reproduced before it
+  was fixed: 500 after 15 seconds; now 200 in 0.2.
+- **A set still importing was counted by category** by the background count
+  v2026.11.325 added, which could keep a half-imported set's numbers. A set
+  being imported now shows "Importing now", and its counts are kept by the
+  import when it finishes, as before.
+
+The import itself was never affected: it carried on through the error page.
+(`tests/test_hashset_import_categories.py`)
+
+## v2026.11.326 — Gallery tiles made ahead, on several workers
+
+Paging through a case of 221,592 files was slow because most pages' tiles
+(the gallery-sized copies of each picture, kept in the case's `thumbs`
+folder) were made only when the page asked for them: 500 pictures decoded and
+shrunk while the examiner waited.
+
+- **A case opened from the list made no tiles ahead at all.** Only a run that
+  had just finished did, so an older case reopened made every tile on demand.
+  Opening a case now starts the tile maker too.
+- **The tile maker had one worker.** It now has several (half the machine's
+  cores, two to six); decoding and shrinking a picture runs outside Python's
+  interpreter lock, so they work side by side.
+- **It made tiles in file order, wherever the examiner was.** The page after
+  the one on screen is now made first: a large case's server queues it when it
+  answers for a page, and a case the page holds whole asks for it
+  (`/api/thumbs/ahead`). The rest of the case follows in order.
+
+Tiles already made are kept, as before; nothing about a case's files changes.
+(`media_gui._Prefill`; `tests/test_thumbs_ahead.py`)
+
 ## v2026.11.325 — The hash server's Hash sets page, on a large store
 
 - **The Hash sets page spun and never loaded** on a store of 367 million

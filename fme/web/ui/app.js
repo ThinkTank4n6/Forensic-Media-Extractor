@@ -2029,6 +2029,27 @@ function render() {
   // so only a page of them is built at a time.
   const list = pageOf(all);
   drawGallery(list, all.length);
+  tilesAhead(all, list);
+}
+
+// The page after this one, for the server to make its tiles first, so it is
+// ready when the examiner gets there. A paged case's server does this
+// itself when it answers for a page (v2026.11.326).
+let aheadTimer = null, aheadSent = "";
+function tilesAhead(all, list) {
+  if (!jobId || running || !list.length) return;
+  const start = all.indexOf(list[0]);
+  if (start < 0) return;
+  const next = all.slice(start + list.length, start + 2 * list.length)
+    .filter(f => f.category === "image").map(f => f.rel_path);
+  const key = next[0] || "";
+  if (!next.length || key === aheadSent) return;
+  clearTimeout(aheadTimer);
+  aheadTimer = setTimeout(() => {
+    aheadSent = key;
+    api("/api/thumbs/ahead", {method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({job: jobId, files: next})}).catch(() => {});
+  }, 300);
 }
 
 // The page of tiles, the pager, the counts around them, and why a gallery

@@ -463,9 +463,13 @@ almost all of it away — every time the page was drawn.
 
 Tile-sized copies are now made once and kept in the case's own `thumbs`
 folder, about 3 KiB each. Measured on phone-sized photographs: **1,394
-times less data per page.** They are made in the background when a run
-finishes, at low priority, so they are ready before anybody scrolls to
-them, and they are thrown away with the case.
+times less data per page.** They are made in the background, at low
+priority and on several workers, when a run finishes and when a case is
+opened from the list -- the page after the one you are looking at first, then
+the rest of the case in order -- so they are usually ready before you get
+there. They are thrown away with the case. On a case of a few hundred
+thousand pictures the first pass takes a while; leave the case open and it
+gets quicker as you go.
 
 A picture that will not decode falls back to the original rather than
 showing a broken tile. A missing thumbnail is a speed problem, not a reason

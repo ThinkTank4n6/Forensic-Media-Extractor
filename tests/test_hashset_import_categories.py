@@ -244,6 +244,34 @@ page = client.get("/admin/sources").get_data(as_text=True)
 check("and once counted, it is kept and shown",
       held.known_breakdown("NSRL test") is not None
       and "Being counted by category" not in page)
+
+# During an import the store's write lock is the import's between batches.
+# A set the page had never counted was counted and written back inside the
+# request, and the write waiting on that lock came back as "Internal Server
+# Error" while an iOS NSRL was importing (v2026.11.327).
+import sqlite3 as _sqlite  # noqa: E402
+held._con.execute("INSERT INTO sources (name, kind, path, added_at) "
+                  "VALUES ('iOS NSRL', 'nsrl', '/x', '2026-11-09')")
+held._con.commit()
+other = _sqlite.connect(held.path, timeout=1)
+other.execute("BEGIN IMMEDIATE")
+other.execute("UPDATE sources SET note=note WHERE name='iOS NSRL'")
+started = time.time()
+response = client.get("/admin/sources")
+took = time.time() - started
+check("the page answers while another writer holds the store",
+      response.status_code == 200 and "iOS NSRL" in response.get_data(as_text=True),
+      f"{response.status_code}, {took:.1f}s")
+check("and does not wait out the server's whole lock wait", took < 5, f"{took:.1f}s")
+other.rollback()
+other.close()
+app.config["IMPORTS"].insert(0, {"name": "iOS NSRL", "state": "running", "kind": "nsrl",
+                                 "path": "/x", "by": "Admin", "address": "",
+                                 "read": 0, "stored": 0})
+page = client.get("/admin/sources").get_data(as_text=True)
+check("a set still importing is not counted by category yet",
+      "Importing now" in page)
+app.config["IMPORTS"].pop(0)
 app.config["STORE"].close()
 app.config["ACCOUNTS"].close()
 
