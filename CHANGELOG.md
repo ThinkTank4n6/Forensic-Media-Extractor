@@ -4,6 +4,25 @@ The release number is in `VERSION` and is reported by both GUIs, the console
 banner, and the Project VIC and LAVA exports, so a report can be traced back
 to the build that produced it.
 
+## v2026.11.328 — Gallery pages that took ten seconds
+
+Moving from one page of 500 tiles to the next took about ten seconds on a
+large case. Two causes, both in how a tile was made:
+
+- **Phone photographs in HEIC (and TIFF, camera raw) asked for the wrong
+  picture.** Their tiles called `/api/preview`, a 1,600-pixel rendering made
+  only on request, never ahead. On an iPhone extraction that is most of a
+  page: 500 full conversions while the examiner waited, and 500 large JPEGs
+  for the browser to shrink -- while the tile maker had already made the
+  360-pixel tiles nobody asked for. They now use `/api/thumb` like any other
+  picture. The details pane still shows the large rendering.
+- **Every tile decoded the whole photograph.** `_make_thumb` loaded the image
+  before shrinking it, which stops Pillow decoding a JPEG at a fraction of
+  its size. It now asks for the reduced decode first: a 12-megapixel JPEG's
+  tile went from about 100 ms to about 30 ms, which speeds both the tile
+  maker and any tile made on demand. A tile is a display copy; nothing about
+  the evidence or its hashes changes.
+
 ## v2026.11.327 — The Hash sets page during an import
 
 - **The Hash sets page answered "Internal Server Error" while an NSRL was

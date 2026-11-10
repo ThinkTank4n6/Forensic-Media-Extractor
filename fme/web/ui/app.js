@@ -2095,9 +2095,13 @@ function drawGallery(list, total) {
         thumb = `<img loading="lazy" alt="${esc(f.name)}" src="/api/thumb?job=${jobId}` +
                 `&file=${encodeURIComponent(f.rel_path)}">`;
       } else if (f.convertible) {
-        // HEIC off a phone, a TIFF, a camera raw: rendered on request so the
-        // tile is the picture rather than a grey rectangle.
-        thumb = `<img loading="lazy" alt="${esc(f.name)}" src="/api/preview?job=${jobId}` +
+        // HEIC off a phone, a TIFF, a camera raw: the same 360-pixel tile
+        // as any picture, which the tile maker makes ahead. It asked for
+        // /api/preview -- a 1,600-pixel rendering made only on request -- so
+        // a page of iPhone photographs was 500 full conversions while the
+        // examiner waited, and the tiles made ahead were never used
+        // (v2026.11.328). The details pane still shows the large rendering.
+        thumb = `<img loading="lazy" alt="${esc(f.name)}" src="/api/thumb?job=${jobId}` +
                 `&file=${encodeURIComponent(f.rel_path)}">`;
       } else if (f.previewable && f.category === "video") {
         // Scrubbable: moving across the tile seeks the video, so a clip can

@@ -2150,6 +2150,15 @@ def _make_thumb(out_dir: str, full: str, rel_path: str) -> bool:
         from fme.engines import imaging
 
         with imaging.open_image(full) as picture:
+            # A JPEG is decoded straight at a fraction of its size (1/2 to
+            # 1/8) when asked before load(); loading first decoded every
+            # pixel of a 12- or 48-megapixel photograph to keep 360 of them,
+            # three to six times the work (v2026.11.328). The tile is a
+            # display copy, never evidence. Other formats ignore draft().
+            try:
+                picture.draft(None, (THUMB_EDGE * 2, THUMB_EDGE * 2))
+            except (AttributeError, ValueError, OSError):
+                pass
             picture.load()
             picture = picture.convert("RGB")
             picture.thumbnail((THUMB_EDGE, THUMB_EDGE))
