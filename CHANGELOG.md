@@ -4,6 +4,35 @@ The release number is in `VERSION` and is reported by both GUIs, the console
 banner, and the Project VIC and LAVA exports, so a report can be traced back
 to the build that produced it.
 
+## v2026.11.330 — The test job, on GitHub's new Ubuntu image
+
+- **The Linux test job stopped before running anything.** GitHub's
+  `ubuntu-latest` is now Ubuntu 26.04, which offers no Python 3.9, so the
+  3.9 leg failed at setup. The floor `pyproject.toml` claims (3.9) is tested
+  on `ubuntu-24.04`; 3.12, what the lab runs, on `ubuntu-latest`.
+- The README said Python 3.8 or newer; `pyproject.toml` has said 3.9.
+
+## v2026.11.329 — A Windows download that needs nothing installed
+
+Installing from source asked every examiner for Python, the Visual Studio
+C++ build tools and a `pip install` that compiles `pytsk3` and
+`libewf-python` -- the step that failed on lab machines.
+
+- **Every release now carries a ready-to-run Windows folder.** Pushing a
+  `v*` tag runs `.github/workflows/release_windows.yml` on GitHub's Windows
+  runner, which has the compiler: it installs `requirements.txt`, builds the
+  portable folder from `packaging/fme.spec`, checks the result starts
+  (`version`, `doctor`), and attaches `FME-<tag>-windows.zip` and its
+  `.sha256` to the release.
+- **A build missing a reader is refused, not published.** PyInstaller only
+  warns about a module it cannot find, so a build without `pytsk3` would read
+  no NTFS and say nothing. The workflow stops if The Sleuth Kit, libewf,
+  Pillow, HEIC, OpenCV, 7z, zstandard or pycryptodome is missing.
+- **`README_FIRST.txt` in the zip** says how to unblock, unzip and start it,
+  and what SmartScreen will say about an unsigned program.
+- The README's Setup section starts with the download; installing from
+  source is now the developers' route.
+
 ## v2026.11.328 — Gallery pages that took ten seconds
 
 Moving from one page of 500 tiles to the next took about ten seconds on a

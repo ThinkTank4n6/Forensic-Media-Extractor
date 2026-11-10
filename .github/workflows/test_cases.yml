@@ -30,13 +30,20 @@ permissions:
 
 jobs:
   pytest:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
         # 3.9 is the floor pyproject.toml claims; 3.12 what the lab runs.
-        python-version: ['3.9', '3.12']
+        # ubuntu-latest became 26.04, which has no Python 3.9 (past its end
+        # of life), and setup-python failed before a test ran. The floor is
+        # tested on the last image that carries it; 3.12 on the newest.
+        include:
+          - python-version: '3.9'
+            os: ubuntu-24.04
+          - python-version: '3.12'
+            os: ubuntu-latest
     env:
       FME_TESTS_STRICT: '1'
     steps:

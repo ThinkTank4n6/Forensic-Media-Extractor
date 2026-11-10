@@ -1,0 +1,114 @@
+name: Windows Release Build
+
+# Examiners should not need Python, Visual Studio or pip to run FME. The
+# compiled readers (pytsk3, libewf-python) build from source on Windows, and
+# that is the step that fails on lab machines. GitHub's Windows runner already
+# has the Visual Studio build tools, so the build happens here, once, and the
+# release carries a folder that runs by double-clicking.
+#
+# Pushing a tag v* builds the portable folder (BUILDING.md), refuses to
+# publish a build missing a reader an examiner relies on, and attaches
+#   FME-<tag>-windows.zip          the folder, zipped
+#   FME-<tag>-windows.zip.sha256   its SHA-256
+# to the GitHub Release for that tag, making the release if there is none.
+# "Run workflow" on the Actions tab builds the same thing as a downloadable
+# artifact without publishing anything.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    env:
+      PYTHONIOENCODING: utf-8
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --prefer-binary -r requirements.txt
+          python -m pip install --prefer-binary pyinstaller
+
+      - name: Install virtual-disk readers (optional)
+        continue-on-error: true
+        run: python -m pip install --prefer-binary -r requirements-vm.txt
+
+      # PyInstaller bundles what imports at build time and only warns about
+      # the rest, so a build without pytsk3 would read no NTFS and say nothing
+      # until an examiner found out on an exhibit. This stops it here instead.
+      - name: Refuse a build missing a reader
+        shell: python
+        run: |
+          import importlib, sys
+          needed = {
+              "flask": "the interface", "waitress": "the server",
+              "pytsk3": "NTFS, exFAT, HFS+, APFS, ext",
+              "pyewf": "E01/Ex01 through libewf",
+              "PIL": "thumbnails and pictures", "pillow_heif": "HEIC",
+              "cv2": "video frames", "py7zr": "7z archives",
+              "zstandard": "Snapchat bundles", "Crypto": "encrypted volumes",
+          }
+          missing = []
+          for module, what in needed.items():
+              try:
+                  importlib.import_module(module)
+                  print(f"  {module:<12} yes  {what}")
+              except Exception as exc:
+                  print(f"  {module:<12} NO   {what}: {exc}")
+                  missing.append(module)
+          sys.exit(f"Not building without: {', '.join(missing)}" if missing else 0)
+
+      - name: Build the portable folder
+        run: python build_exe.py --portable --clean
+
+      - name: The built program starts and reports itself
+        run: |
+          dist\ForensicMediaExtractor\ForensicMediaExtractor.exe version
+          dist\ForensicMediaExtractor\ForensicMediaExtractor.exe doctor
+
+      - name: Zip it, with its hash
+        id: pack
+        shell: pwsh
+        run: |
+          $tag = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME } else { 'v' + (Get-Content VERSION).Trim() }
+          $name = "FME-$tag-windows.zip"
+          Copy-Item packaging\README_FIRST.txt dist\ForensicMediaExtractor\
+          Copy-Item LICENSE, THIRD_PARTY_NOTICES.md dist\ForensicMediaExtractor\
+          Push-Location dist
+          7z a -tzip -mx=5 "..\$name" ForensicMediaExtractor | Out-Null
+          Pop-Location
+          $hash = (Get-FileHash $name -Algorithm SHA256).Hash.ToLower()
+          "$hash  $name" | Out-File -Encoding ascii "$name.sha256"
+          Write-Host "$name  $hash"
+          "name=$name" | Out-File -Append -Encoding utf8 $env:GITHUB_OUTPUT
+
+      - name: Keep it as a build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fme-windows
+          path: |
+            ${{ steps.pack.outputs.name }}
+            ${{ steps.pack.outputs.name }}.sha256
+          retention-days: 30
+
+      - name: Attach it to the release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ${{ steps.pack.outputs.name }}
+            ${{ steps.pack.outputs.name }}.sha256

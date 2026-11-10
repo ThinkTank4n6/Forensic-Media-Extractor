@@ -245,6 +245,32 @@ summary = media_core.run_extraction("case.E01", "./out", mode="both")
 
 ## Setup
 
+### Windows: download and run (most examiners)
+
+Nothing to install: no Python, no Visual Studio, no `pip`.
+
+1. Open [Releases](https://github.com/ThinkTank4n6/Forensic-Media-Extractor/releases)
+   and download `FME-<version>-windows.zip` from the newest release.
+2. Right-click the zip, **Properties**, tick **Unblock**, **OK**.
+3. Unzip it to a local folder you can write to, such as `C:\FME` (not
+   Program Files).
+4. Double-click `ForensicMediaExtractor\ForensicMediaExtractor.exe`. If
+   SmartScreen says "Windows protected your PC", click **More info**, then
+   **Run anyway** -- the build is not code-signed.
+
+Keep the folder whole: the `.exe` needs `_internal` beside it.
+`ForensicMediaExtractor doctor` lists what the build can read; every
+release is built with The Sleuth Kit, libewf, HEIC and OpenCV, and the
+build is refused if any of them is missing
+(`.github/workflows/release_windows.yml`). The zip's SHA-256 is published
+beside it.
+
+### From source (developers)
+
+Only needed to change the code. On Windows, `pytsk3` and `libewf-python`
+compile during install and need the Visual Studio C++ build tools -- the
+step that fails on most machines, and the reason the download above exists.
+
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt      # .venv\Scripts\pip on Windows
@@ -267,7 +293,7 @@ rest later — nothing needs reinstalling. `pytsk3` compiles against libtsk on
 Linux and macOS, so install `libtsk-dev` (or `brew install sleuthkit`) first;
 the file has the exact commands.
 
-Python 3.8 or newer.
+Python 3.9 or newer.
 
 It opens **http://127.0.0.1:5001** in a browser.
 
