@@ -1,0 +1,8 @@
+# What was packed into known.E01, hashed before it was
+# packed. The expected answer comes from what went in.
+# the acquisition holds 6144 sector(s) in 96 chunk(s); MD5 of the raw image 33a694631ba35f8970ea702d5539607e
+# sha256  size  name  state
+1ab744ac02304cba35d003382acc95205790c99afddcd806a3f53432d0573ceb  40960  carved-0.jpg  live
+8d031892135d829f46af682824ace59b9f77922b724abbaca43108c7598d8481  41984  carved-1.jpg  live
+5e606dbc625b0911f5da9a21b9a005dbd53a1b0f651842a3d8cc45a1ac82f7e2  43008  carved-2.jpg  live
+be065b9d453831d09f0ee13c2e7a7c99df3aad3824a0269e2714a01178c6d97f  44032  carved-3.jpg  live

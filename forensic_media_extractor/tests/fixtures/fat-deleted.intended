@@ -1,0 +1,8 @@
+# What was written to fat-deleted.img, hashed before any
+# of it was deleted. The expected answer comes from what
+# went in, not from a reader -- so a reader that is
+# confidently wrong cannot satisfy a test built on this.
+# sha256  size  name  deleted
+d290aa5551bb6f6d1d09559c4de388fad57a1bc628cd12e7482fe7f4b8ab4371  7168  LIVE0001.JPG  live
+9259dd833e6fd292a258f6fa97ac26bec3061e23c18b5ed29f8ab865fb4ed8cd  11264  GONE0002.JPG  deleted
+210f9cba46598e81c1c779ee15b7c18d0732eddafaa0df7bc676db3ccce18a40  3072  GONE0003.JPG  deleted
