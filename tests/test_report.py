@@ -162,7 +162,7 @@ tiny = report.build(out_dir, os.path.join(ROOT, "tiny"), header=HEADER,
 with open(os.path.join(ROOT, "tiny", "DC26-253.html"), encoding="utf-8") as fh:
     tiny_html = fh.read()
 ok &= 'class="donut"' in tiny_html
-print(f"  a one-file report still draws: {'class=\"donut\"' in tiny_html}")
+print("  a one-file report still draws:", 'class="donut"' in tiny_html)
 
 # A report of a large case has to stay openable. Embedding every thumbnail
 # in one document produced a file that took minutes to write and that no

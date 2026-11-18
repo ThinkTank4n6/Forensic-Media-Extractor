@@ -59,7 +59,7 @@ shares = {entry["count"]: entry["percent"] for entry in counted["categories"]}
 ok &= shares.get(96) == 73.3 and shares.get(20) == 15.3
 ok &= shares.get(15) == 11.5
 print(f"  by category: "
-      f"{', '.join(f'{e['count']} ({e['percent']}%)' for e in counted['categories'])}")
+      + ", ".join(f"{e['count']} ({e['percent']}%)" for e in counted["categories"]))
 
 ok &= counted["with_any_flag"] == 1 and counted["known_hash"] == 1
 print(f"  {counted['with_any_flag']} flagged, {counted['known_hash']} "

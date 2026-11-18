@@ -324,8 +324,8 @@ print(f"   repaints instead of rebuilding          "
 
 capped = "MAX_TILES" in script
 ok &= capped
-print(f"   a cap on how many tiles are built       "
-      f"{'yes' if capped else 'MISSING -- \"all\" would hang the browser'}")
+print("   a cap on how many tiles are built       "
+      + ("yes" if capped else 'MISSING -- "all" would hang the browser'))
 
 # Grading fifteen files and grading one are the same act at different
 # sizes, so the cursor should land in the same place either way: on the

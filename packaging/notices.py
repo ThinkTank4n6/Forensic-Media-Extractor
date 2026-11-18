@@ -23,9 +23,28 @@ def project_files(project: str):
     return pairs
 
 
+def _owners() -> dict:
+    """{top-level module: [distribution names]}. packages_distributions()
+    arrived in Python 3.10; on 3.9 the same map is built from each
+    distribution's top_level.txt, or the first part of its file names."""
+    if hasattr(_metadata, "packages_distributions"):
+        return _metadata.packages_distributions()
+    owners: dict = {}
+    for dist in _metadata.distributions():
+        name = dist.metadata["Name"]
+        tops = (dist.read_text("top_level.txt") or "").split()
+        if not tops:
+            tops = {str(f).split("/")[0].split(".")[0] for f in (dist.files or [])
+                    if not str(f).startswith("..")}
+        for top in tops:
+            if name not in owners.setdefault(top, []):
+                owners[top].append(name)
+    return owners
+
+
 def distributions_for(modules):
     """The installed distributions that provide these top-level modules."""
-    owners = _metadata.packages_distributions()
+    owners = _owners()
     found = []
     for module in modules:
         for dist in owners.get(module, []):

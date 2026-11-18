@@ -44,7 +44,8 @@ for raw in states:
     st = g.State(raw, uncategorized=8)
     cache = g.Cache()
     decisions, version = {}, 0
-    worst = 0.0
+    worst = first = 0.0
+    full = float("inf")     # the same answer made from nothing, on this machine
     same = True
     for step in range(40):
         decisions = dict(decisions)          # a new table each version, as casedb gives
@@ -59,20 +60,35 @@ for raw in states:
         version += 1
         started = time.perf_counter()
         adjusted = cache.aggregates(files, decisions, version, raw, st)
-        if step:
-            worst = max(worst, time.perf_counter() - started)
+        took = time.perf_counter() - started
         started = time.perf_counter()
         shown = cache.visible(files, decisions, version, raw, st)
-        if step:
-            worst = max(worst, time.perf_counter() - started)
-        if adjusted != g.aggregates(files, decisions, st) or \
-                [f["rel_path"] for f in shown] != [f["rel_path"] for f in g.visible(files, decisions, st)]:
+        took += time.perf_counter() - started
+        # Step 0 counts from nothing; step 1 builds, once, the index of
+        # which files carry which digest (galleryquery.digest_index) -- the
+        # "first grading after an open" the CHANGELOG gives its own cost.
+        if step == 1:
+            first = took
+        elif step > 1:
+            worst = max(worst, took)
+        started = time.perf_counter()
+        whole = g.aggregates(files, decisions, st)
+        whole_list = g.visible(files, decisions, st)
+        full = min(full, time.perf_counter() - started)
+        if adjusted != whole or \
+                [f["rel_path"] for f in shown] != [f["rel_path"] for f in whole_list]:
             same = False
             break
     check(f"{raw}: counts and the filtered list the same as made from nothing, "
           f"after each of 40 gradings", same)
-    check("  and each adjusted under a twentieth of a second", worst < 0.05,
-          f"{worst * 1000:.1f} ms at most")
+    # Against the count from nothing on the same machine, not a fixed
+    # time: a GitHub runner took 67 ms where this workstation takes 20, and
+    # the point is that a grading no longer costs the whole count.
+    check("  and each adjusted in under a quarter of a count from nothing",
+          worst < full / 4,
+          f"{worst * 1000:.1f} ms at most, {full * 1000:.0f} ms from nothing")
+    check("  and the first, which builds the index, no more than two counts from nothing",
+          first < full * 2, f"{first * 1000:.1f} ms")
 
 print("after the list itself is replaced (a new run, an open)")
 st = g.State({"filter": "all"}, uncategorized=8)

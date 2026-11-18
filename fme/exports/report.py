@@ -1941,9 +1941,9 @@ def _pager(stem: str, index: int, total: int) -> str:
     links = []
     for number in range(1, total + 1):
         name = f"{stem}_page{number:03d}.html"
-        links.append(f'<a href="{_esc(name)}"'
-                     f'{" class=\"here\"" if number == index else ""}>'
-                     f'{number}</a>')
+        # No backslash inside the braces: Python before 3.12 refuses one.
+        here = ' class="here"' if number == index else ""
+        links.append(f'<a href="{_esc(name)}"{here}>{number}</a>')
     return (f'<nav class="pager">Page {index} of {total}: '
             + " ".join(links) + "</nav>")
 

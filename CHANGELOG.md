@@ -4,6 +4,39 @@ The release number is in `VERSION` and is reported by both GUIs, the console
 banner, and the Project VIC and LAVA exports, so a report can be traced back
 to the build that produced it.
 
+## v2026.11.333 — Python 3.9 again, and two tests that measured the machine
+
+The GitHub run on Python 3.9 -- the oldest Python `pyproject.toml` promises --
+failed 89 of 212. It had not run for several releases: Ubuntu 26.04 has no
+Python 3.9, so setup-python stopped before any test until the job was moved
+to ubuntu-24.04 (v2026.11.330), and this is the first time since then that
+it reached the tests.
+
+- **Nearly all 89 were one line.** `fme/exports/report.py` (since
+  v2026.11.324) put a backslash inside an f-string's braces, which Python
+  only allows from 3.12. Everything that opens the web page imports the
+  report, so the page, the browser tests and the hash server all failed with
+  it. Rewritten without it; three tests had the same construction and are
+  rewritten too. Every file in the project now compiles on Python 3.9.
+- `packaging/notices.py` used `importlib.metadata.packages_distributions()`,
+  which arrived in 3.10: on 3.9 it now builds the same map from each
+  package's own metadata (checked to give the same answer for Flask, OpenCV
+  and NumPy).
+- `tests/test_requirements.py` told the standard library from third-party
+  packages with a 3.10 list; on 3.9 it fell back to the built-in modules
+  only and called `os`, `json` and the rest unknown. It now reads the
+  standard library's own folder.
+- `tests/test_counts_adjusted.py` (v2026.11.332) required each recount
+  under 50 ms; a GitHub runner took 67. It now compares with a count from
+  nothing on the same machine (each grading under a quarter of one), and
+  times on its own the first grading after the list is made -- which
+  builds, once, the index of which files carry which hash and was being
+  counted as an ordinary grading.
+
+Checked by running the whole suite under Python 3.9 here: every failure
+left is a package this workspace cannot install for 3.9 (NumPy, OpenCV,
+Pillow, ReportLab, pycryptodome), not the version of Python.
+
 ## v2026.11.332 — The image models on the graphics cards, and the open issues
 
 ### The graphics cards, for the models
