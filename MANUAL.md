@@ -1322,7 +1322,16 @@ twenty times.
 **Containers.** A zip, database or cache that other media came out of is not
 a picture; its contents are already listed one by one. It stays in the
 manifest and the reports with its hashes — it is evidence — but it gets no
-tile. **Show containers** in the toolbar brings them in.
+tile. **Show containers** in the toolbar brings them in. While they are
+hidden the category bar does not count them either, and says how many it is
+leaving out ("+ 12 container(s) not shown"; click it to show them), so a
+case graded to the end reads 0 Uncategorized.
+
+A photo is never a container because a smaller picture came out of it: its
+own EXIF thumbnail, or a video's cover art, is listed as a file of its own
+and the photo keeps its tile. Before v2026.11.334 such photos were hidden as
+containers and left Uncategorized with no tile to grade them from; a case
+made then is corrected when it is opened.
 
 **Known software.** **Hide known software** leaves out files whose hash is
 in a known-software list such as the NSRL. A hit means the file is
@@ -2254,4 +2263,9 @@ form.
   category: screening, similarity and content search measure and sort only.
   A command-line run (`python -m fme extract`) consults no store: open its
   output as a case and press *Check this case against the store*. **A file matching nothing is unknown,
-  which is not the same as cleared.**
+  which is not the same as cleared.** While a check runs, the button counts
+  the seconds ("Checking… 40 s"); when it ends, a message in the corner and
+  the status line say so, with how many files matched and how many were
+  categorized from the match -- from whichever tab you are on, including a
+  check that started by itself after a run. The full result is on the
+  Hashes tab.

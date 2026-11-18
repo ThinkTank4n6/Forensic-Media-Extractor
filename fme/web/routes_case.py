@@ -292,7 +292,7 @@ def api_case_reprocess():
             if found:
                 try:
                     files, _dups = case_records(out_dir)
-                    entries = [_job_file_entry(f) for f in files]
+                    entries = _file_entries(files)
                     with JOBS_LOCK:
                         if job_id in JOBS:
                             JOBS[job_id]["files"] = entries

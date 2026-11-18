@@ -12,6 +12,18 @@ formats review platforms read.
 """
 
 import os
+import sys
+
+# The floor, said plainly at the start rather than as a syntax error from
+# somewhere inside (v2026.11.334). The Windows release carries its own
+# Python and never reaches this.
+MIN_PYTHON = (3, 11)
+if sys.version_info < MIN_PYTHON:
+    raise SystemExit(
+        f"Forensic Media Extractor needs Python {MIN_PYTHON[0]}.{MIN_PYTHON[1]} "
+        f"or newer; this is Python {sys.version_info[0]}.{sys.version_info[1]} "
+        f"({sys.executable}). Install a newer Python from python.org, or use "
+        f"the Windows release, which needs no Python at all.")
 
 __all__ = ["engines", "exports", "review", "web", "RELEASE"]
 

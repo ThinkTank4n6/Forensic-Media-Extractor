@@ -245,130 +245,33 @@ def api_store_remove():
 
 @app.route("/api/store/scan", methods=["POST"])
 def api_store_scan():
-    """Check a finished run against everything in the store."""
+    """Check a finished run against everything in the store. With
+    "background": true it starts on a thread and answers at once; GET
+    /api/store/scan?job= says how it stands and, once done, what it found."""
     data = request.get_json(force=True) or {}
     with JOBS_LOCK:
         job = JOBS.get(data.get("job", ""))
     if job is None:
         return error_response(ValueError(
             "There is no finished run to check. Run an extraction first."))
-    manifest = os.path.join(job["out_dir"], "manifest.json")
-    if not os.path.isfile(manifest):
-        return error_response(FileNotFoundError("That job has no manifest"))
+    if data.get("background"):
+        return jsonify({"ok": True, **_store_scan_in_background(data["job"], job, data)})
     try:
-        store = _store()
-        result = store.scan_manifest(manifest)
+        return jsonify(_store_scan(job, data))
     except (OSError, sqlite3.Error, ValueError) as exc:
         return error_response(exc)
 
-    # The examiner's own stash, checked in the same pass. It holds what
-    # they decided in earlier cases, which is the whole reason it exists:
-    # filling it as they work and never consulting it means grading the
-    # same file twice. Where it disagrees with the shared store the
-    # disagreement is reported and neither category is applied.
-    stash_found, stash_clash = {}, []
-    if (data.get("use_stash", True)
-            and settings.load().get("stash_on", "1") != "0"):
-        try:
-            from fme.review import stash as _stash
 
-            store_said = {}
-            for row in result["rows"]:
-                digest = (row.get("record") or {}).get("sha256", "")
-                for match in row.get("matches") or []:
-                    if match.get("category") is not None:
-                        store_said[digest] = dict(
-                            match, region=match.get("region") or "US")
-                        break
-            checked = _stash.check(
-                [{"sha256": (row.get("record") or {}).get("sha256", ""),
-                  "md5": (row.get("record") or {}).get("md5", "")}
-                 for row in result["rows"]],
-                settings.load().get("stash_path", ""), store_said)
-            stash_found = {row["sha256"]: row for row in checked["matched"]
-                           if row.get("sha256")}
-            stash_clash = checked["disagreements"]
-        except Exception as exc:  # noqa: BLE001
-            LOG.warning("the stash could not be checked: %s", exc)
-
-    csv_path = os.path.join(job["out_dir"], "hash_store_matches.csv")
-    hashsets.write_csv(
-        {"rows": [{"record": r["record"],
-                   "matches": [{"set": m["source"], "kind": m["kind"],
-                                "note": m["note"] or "",
-                                "record": m.get("record") or {}}
-                               for m in r["matches"]]}
-                  for r in result["rows"]]}, csv_path)
-
-    lookup = {}
-    for row in result["rows"]:
-        digest = row["record"].get("sha256")
-        if digest and row["matches"]:
-            lookup.setdefault(digest, [
-                {"set": m["source"], "kind": m["kind"],
-                 # Carried so a set that asserts a category can be acted on,
-                 # not only displayed.
-                 "category": m.get("category"),
-                 "note": " · ".join(x for x in (
-                     m["note"] or (f"category {m['category']}"
-                                   if m["category"] is not None else ""),
-                     f"matched on {m['matched_on']}") if x),
-                 # Everything the set recorded about this file, so a match
-                 # can be acted on rather than only noticed.
-                 "record": m.get("record") or {},
-                 # The scheme the store's bare codes are in. Dropped here
-                 # before v2026.11.318, so every store match read as US.
-                 # A server from before regions sends none: a US store.
-                 "region": m.get("region") or "US",
-                 "via": "store"}
-                for m in row["matches"]])
-
-    # The examiner's own earlier decisions, alongside the unit's. Added
-    # here so one file carries both and each says which it came from -- a
-    # match with no source is how somebody comes to rely on a category
-    # nobody chose.
-    for digest, entry in stash_found.items():
-        if not digest:
-            continue
-        lookup.setdefault(digest, []).append({
-            "set": "your stash", "kind": "stash",
-            "category": entry.get("category"),
-            "note": "you graded this in an earlier case",
-            # None for a row from before v2026.11.318: never applied.
-            "region": entry.get("region"),
-            "record": {}, "via": "stash"})
-
-    case = _case_for(data.get("job", ""))
-    if case is not None:
-        # Same as the per-session sets: a match made now should still be
-        # there tomorrow, and in a report written next week. Merged by
-        # origin: this replaces the store's and the stash's earlier matches
-        # and keeps the session sets'. A dict update replaced each file's
-        # whole list, session matches included.
-        case.merge_derived("hash_matches", lambda saved: hashsets.merge_matches(
-            saved, lookup, {"store", "stash"}))
-
-    with JOBS_LOCK:
-        merged = hashsets.merge_matches(
-            JOBS[data["job"]].get("hash_matches") or {}, lookup,
-            {"store", "stash"})
-        JOBS[data["job"]]["hash_matches"] = merged
-        for entry in JOBS[data["job"]]["files"]:
-            entry["hash_sets"] = merged.get(entry.get("sha256"), [])
-        _entries_changed(data["job"])
-    # A file the stash and the store grade differently is reported as a
-    # disagreement "neither has been applied" -- and was then auto-graded
-    # anyway, by whichever code sorted first.
-    applied = _apply_hash_categories(
-        data["job"], lookup, hold=[c.get("sha256", "") for c in stash_clash]) \
-        if data.get("autocategorize", True) else {"categorized": 0}
-    return jsonify({"ok": True, "csv": csv_path, "checked": result["checked"],
-                    "locations": result.get("locations", result["checked"]),
-                    "matched": result["matched"],
-                    "unmatched": result["unmatched"],
-                    "by_source": result["by_source"], "applied": applied,
-                    "your_stash": len(stash_found),
-                    "stash_disagreements": stash_clash})
+@app.route("/api/store/scan", methods=["GET"])
+def api_store_scan_state():
+    """How a store check started with "background" stands: running (with how
+    long), done (with what it found), failed (with why), or none."""
+    job_id = request.args.get("job", "")
+    with STORE_SCANS_LOCK:
+        held = dict(STORE_SCANS.get(job_id) or {"state": "none"})
+    if held.get("started"):
+        held["seconds"] = round((held.get("finished") or time.time()) - held["started"], 1)
+    return jsonify({"ok": True, **held})
 
 
 @app.route("/api/store/contribute", methods=["POST"])

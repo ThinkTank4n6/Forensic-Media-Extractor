@@ -64,26 +64,8 @@ def requirements(name: str) -> set:
     return names
 
 
-def _stdlib_before_310() -> set:
-    """sys.stdlib_module_names arrived in Python 3.10. Before it, the
-    standard library is what sits in its own folder (and lib-dynload) plus
-    what is built in -- never site-packages -- and the Windows-only modules
-    the program names, which a Linux runner does not have."""
-    import sysconfig
-    names = set(sys.builtin_module_names) | {"msvcrt", "winreg", "_winapi", "winsound"}
-    stdlib = sysconfig.get_paths()["stdlib"]
-    for folder in (stdlib, os.path.join(stdlib, "lib-dynload")):
-        if not os.path.isdir(folder):
-            continue
-        for entry in os.listdir(folder):
-            if entry in ("site-packages", "dist-packages"):
-                continue
-            names.add(entry.split(".")[0])
-    return names
-
-
 def imported() -> dict:
-    std = set(getattr(sys, "stdlib_module_names", ())) or _stdlib_before_310()
+    std = set(sys.stdlib_module_names)
     found = {}
     for root, _, files in os.walk(os.path.join(PROJECT, "fme")):
         for name in files:

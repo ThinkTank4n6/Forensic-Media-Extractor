@@ -677,7 +677,7 @@ def api_vic_import():
                 JOBS[job_id].update(
                     status="done", phase="finished", summary=summary,
                     recovered=len(files),
-                    files=[_job_file_entry(f) for f in files])
+                    files=_file_entries(files))
         except Exception as exc:  # noqa: BLE001
             with JOBS_LOCK:
                 JOBS[job_id].update(status="error", error=str(exc))
@@ -983,8 +983,9 @@ def _case_entries(out_dir: str, job_id: str) -> tuple:
     rows = manifest.get("files", [])
     total = len(rows)
     entries = []
+    shown_again = _media_holding_a_find(rows)
     for n, row in enumerate(rows):
-        entries.append(_job_file_entry(row))
+        entries.append(_job_file_entry(row, shown_again))
         if n % 5000 == 0:
             _opening(job_id, stage="Preparing the files for the gallery",
                      done=n, total=total, unit="files")
@@ -1227,12 +1228,186 @@ def _playable_state(full: str, out_dir: str, digest: str) -> dict:
     return {"state": "making"}
 
 
+
+def _store_scan(job: dict, data: dict) -> dict:
+    """Check a finished run against everything in the store, and the
+    examiner's stash: the matches kept with the case and applied to the files
+    nobody has graded. Raises OSError, sqlite3.Error or ValueError when the
+    store cannot be read. Run on a thread for the page (STORE_SCANS), since a
+    case of 200,000 files is minutes against a shared store, and a request
+    held that long left the examiner with a button reading "Checking..." and
+    no word of when it ended (v2026.11.334)."""
+    manifest = os.path.join(job["out_dir"], "manifest.json")
+    if not os.path.isfile(manifest):
+        raise FileNotFoundError("That job has no manifest")
+    store = _store()
+    result = store.scan_manifest(manifest)
+
+    # The examiner's own stash, checked in the same pass. It holds what
+    # they decided in earlier cases, which is the whole reason it exists:
+    # filling it as they work and never consulting it means grading the
+    # same file twice. Where it disagrees with the shared store the
+    # disagreement is reported and neither category is applied.
+    stash_found, stash_clash = {}, []
+    if (data.get("use_stash", True)
+            and settings.load().get("stash_on", "1") != "0"):
+        try:
+            from fme.review import stash as _stash
+
+            store_said = {}
+            for row in result["rows"]:
+                digest = (row.get("record") or {}).get("sha256", "")
+                for match in row.get("matches") or []:
+                    if match.get("category") is not None:
+                        store_said[digest] = dict(
+                            match, region=match.get("region") or "US")
+                        break
+            checked = _stash.check(
+                [{"sha256": (row.get("record") or {}).get("sha256", ""),
+                  "md5": (row.get("record") or {}).get("md5", "")}
+                 for row in result["rows"]],
+                settings.load().get("stash_path", ""), store_said)
+            stash_found = {row["sha256"]: row for row in checked["matched"]
+                           if row.get("sha256")}
+            stash_clash = checked["disagreements"]
+        except Exception as exc:  # noqa: BLE001
+            LOG.warning("the stash could not be checked: %s", exc)
+
+    csv_path = os.path.join(job["out_dir"], "hash_store_matches.csv")
+    hashsets.write_csv(
+        {"rows": [{"record": r["record"],
+                   "matches": [{"set": m["source"], "kind": m["kind"],
+                                "note": m["note"] or "",
+                                "record": m.get("record") or {}}
+                               for m in r["matches"]]}
+                  for r in result["rows"]]}, csv_path)
+
+    lookup = {}
+    for row in result["rows"]:
+        digest = row["record"].get("sha256")
+        if digest and row["matches"]:
+            lookup.setdefault(digest, [
+                {"set": m["source"], "kind": m["kind"],
+                 # Carried so a set that asserts a category can be acted on,
+                 # not only displayed.
+                 "category": m.get("category"),
+                 "note": " · ".join(x for x in (
+                     m["note"] or (f"category {m['category']}"
+                                   if m["category"] is not None else ""),
+                     f"matched on {m['matched_on']}") if x),
+                 # Everything the set recorded about this file, so a match
+                 # can be acted on rather than only noticed.
+                 "record": m.get("record") or {},
+                 # The scheme the store's bare codes are in. Dropped here
+                 # before v2026.11.318, so every store match read as US.
+                 # A server from before regions sends none: a US store.
+                 "region": m.get("region") or "US",
+                 "via": "store"}
+                for m in row["matches"]])
+
+    # The examiner's own earlier decisions, alongside the unit's. Added
+    # here so one file carries both and each says which it came from -- a
+    # match with no source is how somebody comes to rely on a category
+    # nobody chose.
+    for digest, entry in stash_found.items():
+        if not digest:
+            continue
+        lookup.setdefault(digest, []).append({
+            "set": "your stash", "kind": "stash",
+            "category": entry.get("category"),
+            "note": "you graded this in an earlier case",
+            # None for a row from before v2026.11.318: never applied.
+            "region": entry.get("region"),
+            "record": {}, "via": "stash"})
+
+    case = _case_for(data.get("job", ""))
+    if case is not None:
+        # Same as the per-session sets: a match made now should still be
+        # there tomorrow, and in a report written next week. Merged by
+        # origin: this replaces the store's and the stash's earlier matches
+        # and keeps the session sets'. A dict update replaced each file's
+        # whole list, session matches included.
+        case.merge_derived("hash_matches", lambda saved: hashsets.merge_matches(
+            saved, lookup, {"store", "stash"}))
+
+    with JOBS_LOCK:
+        merged = hashsets.merge_matches(
+            JOBS[data["job"]].get("hash_matches") or {}, lookup,
+            {"store", "stash"})
+        JOBS[data["job"]]["hash_matches"] = merged
+        for entry in JOBS[data["job"]]["files"]:
+            entry["hash_sets"] = merged.get(entry.get("sha256"), [])
+        _entries_changed(data["job"])
+    # A file the stash and the store grade differently is reported as a
+    # disagreement "neither has been applied" -- and was then auto-graded
+    # anyway, by whichever code sorted first.
+    applied = _apply_hash_categories(
+        data["job"], lookup, hold=[c.get("sha256", "") for c in stash_clash]) \
+        if data.get("autocategorize", True) else {"categorized": 0}
+    return ({"ok": True, "csv": csv_path, "checked": result["checked"],
+                    "locations": result.get("locations", result["checked"]),
+                    "matched": result["matched"],
+                    "unmatched": result["unmatched"],
+                    "by_source": result["by_source"], "applied": applied,
+                    "your_stash": len(stash_found),
+                    "stash_disagreements": stash_clash})
+
+
+# job id -> {"state": running|done|failed, "started", "finished", "result"
+# or "error"}: the store checks running or finished on a thread.
+STORE_SCANS: dict = {}
+STORE_SCANS_LOCK = threading.Lock()
+
+
+def _store_scan_in_background(job_id: str, job: dict, data: dict) -> dict:
+    """Start the check on a thread, once per case at a time; what it is now."""
+    with STORE_SCANS_LOCK:
+        held = STORE_SCANS.get(job_id)
+        if held and held["state"] == "running":
+            return dict(held)
+        STORE_SCANS[job_id] = {"state": "running", "started": time.time()}
+
+    def work():
+        try:
+            answer = {"state": "done", "result": _store_scan(job, data)}
+        except (OSError, sqlite3.Error, ValueError) as exc:
+            answer = {"state": "failed", "error": str(exc) or type(exc).__name__}
+        except Exception as exc:  # noqa: BLE001 - said on the page, not lost on a thread
+            LOG.exception("the store check failed")
+            answer = {"state": "failed", "error": f"{type(exc).__name__}: {exc}"}
+        with STORE_SCANS_LOCK:
+            STORE_SCANS[job_id] = dict(STORE_SCANS.get(job_id) or {}, **answer,
+                                       finished=time.time())
+    threading.Thread(target=work, daemon=True, name="store-check").start()
+    return {"state": "running"}
+
 def _accel_status() -> dict:
     from fme.engines import accel
     return accel.status()
 
 
-def _job_file_entry(f: dict) -> dict:
+def _media_holding_a_find(rows) -> set:
+    """Source paths of pictures and videos something was found inside by a
+    byte scan (a photo's own EXIF thumbnail, a video's cover art: recorded as
+    "<path>::+<offset>"). Cases made before v2026.11.334 marked these as
+    containers, which hid the full picture from the gallery and left it
+    Uncategorized with no tile to grade it from; they are shown again."""
+    inside = set()
+    for f in rows:
+        where = f.get("source_path") or ""
+        if "::+" in where:
+            inside.add(where.split("::+", 1)[0])
+    return inside
+
+
+def _file_entries(rows) -> list:
+    """The gallery's entries for these manifest rows, all of one case."""
+    rows = list(rows)
+    shown_again = _media_holding_a_find(rows)
+    return [_job_file_entry(f, shown_again) for f in rows]
+
+
+def _job_file_entry(f: dict, shown_again=frozenset()) -> dict:
     return {
         "name": os.path.basename(f["out_path"]), "rel_path": f["out_path"],
         "ext": f["ext"], "category": f["category"], "engine": f["engine"],
@@ -1265,7 +1440,9 @@ def _job_file_entry(f: dict) -> dict:
         "body_serial_present": bool(f.get("body_serial")),
         # Other media came out of this file: it is in the manifest and the
         # reports, but it is not a picture, so the gallery leaves it out.
-        "container": bool(f.get("container")),
+        "container": bool(f.get("container")) and not (
+            f.get("category") in ("image", "video", "audio")
+            and (f.get("source_path") or "") in shown_again),
         # What this tile stands for: identical copies found elsewhere, and
         # how many files look like it.
         "copies": int(f.get("instances") or 1),
@@ -1750,7 +1927,7 @@ def api_start():
             if not fresh and not tail.restarted:
                 return
             records = [rec for rec in map(_live_row, fresh) if rec is not None]
-            entries = [_job_file_entry(rec) for rec in records]
+            entries = _file_entries(records)
             # Details reads the same rows. Parsed here already, they are handed
             # over rather than parsed again on the first click -- 7 s at
             # 200,000 rows, with the GIL held.
@@ -1794,7 +1971,7 @@ def api_start():
                     status="canceled" if (summary.get("canceled")
                                          or summary.get("cancelled")) else "done",
                     phase="finished", summary=summary, recovered=len(files),
-                    files=[_job_file_entry(f) for f in files])
+                    files=_file_entries(files))
             # The run is over, so let go of the source. An examiner who has
             # finished with an image wants the drive back, and a program
             # that holds it until it closes is one they have to close.

@@ -4,10 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "forensic-media-extractor"
-version = "2026.11.333"
+version = "2026.11.334"
 description = "Recover images, video and audio from forensic images, devices, folders, packages and databases, and export for review platforms"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.11"
 license = {text = "MIT"}
 keywords = ["forensics", "dfir", "carving", "project-vic", "lava"]
 authors = [{name = "Christopher A. Tankelewicz (ThinkTank4n6)"}]
@@ -24,7 +24,7 @@ dependencies = [
 [project.optional-dependencies]
 # What an examiner's machine usually wants.
 full = [
-    "pytsk3>=20230125",        # exFAT, NTFS, HFS+, APFS, ext2/3/4
+    "pytsk3>=20260715",        # exFAT, NTFS, HFS+, ext2/3/4 (wheels for 3.10-3.14)
     "libewf-python>=20231119", # EnCase E01/Ex01
     "pillow>=10.0",            # visual similarity, report thumbnails
     "py7zr>=0.20",             # media inside 7z archives

@@ -23,7 +23,7 @@ stops being a tidiness question.
 ## 1. Installing on a new machine
 
 ```
-python --version            # 3.9 or newer; 3.11 or newer recommended
+python --version            # 3.11 or newer; 3.12 recommended
 pip install -r requirements.txt
 ```
 

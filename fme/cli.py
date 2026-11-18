@@ -236,6 +236,14 @@ def doctor() -> int:
         try:
             __import__(module)
             present = "yes"
+            # Which release, for the two an examiner is told to keep current.
+            dist = {"pytsk3": "pytsk3", "pyewf": "libewf-python"}.get(module)
+            if dist:
+                try:
+                    from importlib.metadata import version as _version
+                    what = f"{what}; version {_version(dist)}"
+                except Exception:  # noqa: BLE001 - a build with no metadata
+                    pass
         except ImportError:
             present = "no "
         # Several of these stopped being required: the vendored readers

@@ -68,12 +68,14 @@ class Src:
     def close(self): pass
 
 found = {}
+marked = {}
 for label, inside in (("without --scan-inside", False), ("with --scan-inside", True)):
     out = os.path.join(tempfile.gettempdir(), f"inside_{inside}"); shutil.rmtree(out, ignore_errors=True)
     s = media_core.run_extraction("mock", out, mode="fs", source=Src(),
                                   scan_inside=inside)
     imgs = [f for f in s["files"] if f["category"] == "image"]
     found[inside] = {f["source_path"] for f in imgs}
+    marked[inside] = {f["source_path"] for f in s["files"] if f.get("container")}
     print(f"{label:24} -> {len(imgs)} image(s)")
     for f in imgs:
         print(f"     {f['engine']:9} {f['size']:>7}  {f['source_path'][:58]}")
@@ -92,5 +94,13 @@ print(f"with it, both pictures deflated inside the .docx: {members}")
 thumb = any(p.startswith("/PHOTO.JPG::+") for p in found[True])
 ok &= thumb
 print(f"and the thumbnail inside the photo: {thumb}")
+# The photo is still the photo. Marked a container, it was hidden from the
+# gallery with only its thumbnail shown, and counted Uncategorized with
+# nothing to grade it from -- 4,441 files in a 221,292-file case
+# (v2026.11.334).
+photo_shown = "/PHOTO.JPG" not in marked[True]
+ok &= photo_shown
+print(f"and the photo the thumbnail came out of is not called a container: "
+      f"{photo_shown} {sorted(marked[True])}")
 print("\nALL CHECKS PASS" if ok else "\nFAILURES ABOVE")
 sys.exit(0 if ok else 1)

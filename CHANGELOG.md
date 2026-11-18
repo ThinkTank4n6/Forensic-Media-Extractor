@@ -4,6 +4,83 @@ The release number is in `VERSION` and is reported by both GUIs, the console
 banner, and the Project VIC and LAVA exports, so a report can be traced back
 to the build that produced it.
 
+## v2026.11.334 — Photos hidden as containers, and Python 3.11
+
+### Photos were hidden as containers and left Uncategorized
+
+An examiner graded every tile of a 221,292-file case and the category bar
+still said **4,441 Uncategorized**, with nothing left in Not yet reviewed.
+
+- **A photo whose EXIF thumbnail came out of it was marked a container.**
+  Every file the file-system walk stores is looked inside for media, which is
+  how a photo's own thumbnail (and a video's cover art) is found and listed.
+  Whatever anything came out of was then recorded as a container, and the
+  gallery hides containers: the full picture had no tile, its thumbnail was
+  the only one, and the photo stayed Uncategorized -- in the bar, and in a
+  report, which listed the full picture as ungraded while its thumbnail
+  carried the grade. Reproduced with the photo-and-thumbnail fixture already
+  in `tests/test_compound_scan.py`: the photo came back `container: true`.
+- **Fixed for new runs**: a file that is itself a picture, video or audio
+  is never recorded as a container (`embedded._is_media_itself`). The zips,
+  documents and caches media come out of still are.
+- **Fixed for cases already made**: when a case is opened, a picture or
+  video marked a container is shown again if something was found inside it
+  by a byte scan (`<path>::+<offset>`) -- a photo's thumbnail, a video's
+  cover art (`media_gui._media_holding_a_find`). The pieces a clip was
+  rebuilt from stay hidden. Opening the case again with .334 is all it takes;
+  the photos appear under Not yet reviewed.
+- **The category bar counts what the gallery shows.** It counted every file,
+  hidden containers included, so a case graded to the end could never read 0.
+  While containers are hidden they are left out of the bar too, and the bar
+  says how many ("+ N container(s) not shown"; a click shows them). The
+  report and file-export dialogs still count every file, since they export
+  every file.
+- `tests/test_photo_not_container.py` opens a case as .333 left it, through
+  the route: with the correction turned off it reproduces the examiner's
+  screen (every tile graded, two left Uncategorized), and with it, 0.
+
+### Python 3.11 or newer
+
+The floor is Python 3.11 (`pyproject.toml`, `requirements.txt`, the README,
+DEPLOYMENT.md), and the GitHub tests run 3.11 and 3.12. 3.9 reached its end
+of life in October 2025 and 3.10 in October 2026. Started on anything older,
+the program now says which Python it needs and which one it found, instead of
+failing later on a syntax error. The two 3.9 stand-ins added in .333 are
+removed, since 3.11 has what they stood in for. The Windows release carries
+its own Python 3.12 and is unaffected.
+
+### When the store check has finished
+
+*Check this case against the store* said nothing when it ended: the button
+read "Checking…" until the request came back and then changed back, with the
+result written on the Hashes tab -- so a check that started by itself after a
+run, while the examiner was in the gallery, ended without a word. And the
+whole check ran inside that one request, minutes against a shared store on a
+large case. It now runs on a thread (`media_gui._store_scan`, GET
+`/api/store/scan?job=` for how it stands); the button counts the seconds, and
+when it ends a message in the corner and the status line say how many files
+were checked, matched and categorized, from any tab. A failure is said the
+same way. The button also kept being renamed "Check this run…" after its
+first use; it keeps its own name. `tests/test_store_classifies.py` checks the
+message, for a check pressed and one started by itself (it had waited for
+the button's text to start with "Check", which "Checking…" does).
+
+### The Sleuth Kit's Python binding, and AFF4
+
+- **pytsk3 20260715 or newer** (was 20230125). It is the newest release
+  (July 15, 2026), and the first with ready-made wheels for Windows, macOS
+  and Linux on every Python from 3.10 to 3.14, so nothing has to be compiled
+  -- the Visual Studio step examiners were stuck on. A fresh install already
+  took it; the floor now says so. Its repository has had commits since
+  (October 30, 2026), to its own tests only, with no release. It still has
+  no APFS pool support, so APFS stays with the vendored reader.
+- `doctor` prints the installed version of pytsk3 and of libewf-python.
+- **AFF4** is read by the vendored acquisition reader, not by the pyaff4
+  library (whose only stable release, 0.34, is from 2021; the 2.0 releases
+  of November 2026 are alphas). The README still said "AFF4, AD1: not
+  supported"; the code has read both since v2026.11.315
+  (`tests/test_real_evidence_fixtures.py`). Corrected.
+
 ## v2026.11.333 — Python 3.9 again, and two tests that measured the machine
 
 The GitHub run on Python 3.9 -- the oldest Python `pyproject.toml` promises --

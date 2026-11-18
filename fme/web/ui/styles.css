@@ -582,6 +582,8 @@
   }
   .catchip .n { margin-left: 5px; }
   .catchip.empty { opacity: .5; }
+  /* Not a category: what the bar is leaving out while containers are hidden. */
+  .catchip.containers-note { border-style: dashed; font-style: italic; }
   .pager { display: flex; gap: 6px; align-items: center; justify-content: center;
            padding: 12px 0 4px; font-size: 12px; color: var(--muted); }
   .pager button { padding: 3px 10px; font-size: 11px; }

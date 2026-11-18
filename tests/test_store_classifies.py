@@ -121,12 +121,24 @@ try:
             store_path)
         page.evaluate("() => showTab('hashes')")
         page.click("#store-scan")
+        # Not "starts with Check": "Checking…" does too, so that waited for
+        # nothing. The button comes back usable once the check has ended.
         page.wait_for_function(
-            "() => document.getElementById('store-scan').textContent.startsWith('Check')",
-            timeout=60000)
+            "() => !document.getElementById('store-scan').disabled", timeout=60000)
         page.wait_for_timeout(500)
         check("pressing the check shows its categories in the gallery at once",
               page.evaluate(shown, shas) == [3, 3, 3], str(page.evaluate(shown, shas)))
+        said = page.evaluate("() => document.getElementById('status').innerText")
+        check("and says it finished, and what it found, wherever the examiner is",
+              said.startswith("Store check finished") and "3 matched" in said
+              and "3 categorized" in said, said)
+        toasts = page.evaluate("() => document.getElementById('toast').innerText")
+        check("in the message in the corner too", "Store check finished" in toasts,
+              toasts[:160])
+        check("and the button keeps its own name",
+              page.evaluate("() => document.getElementById('store-scan').textContent")
+              == "Check this case against the store",
+              page.evaluate("() => document.getElementById('store-scan').textContent"))
 
         # A second run, with the store already set up and nothing pressed.
         page.evaluate("() => showTab('review')")
@@ -140,6 +152,15 @@ try:
             pass
         check("a run that finishes is checked against the store by itself",
               page.evaluate(shown, shas) == [3, 3, 3], str(page.evaluate(shown, shas)))
+        try:
+            page.wait_for_function(
+                "() => /Store check finished/.test(document.getElementById('toast').innerText)"
+                " && !document.getElementById('store-scan').disabled", timeout=30000)
+            announced = True
+        except Exception:                                  # noqa: BLE001
+            announced = False
+        check("and says when that check finished, from the gallery", announced,
+              page.evaluate("() => document.getElementById('toast').innerText")[:160])
         check("nothing the page did threw", not thrown, "; ".join(thrown[:2]))
         browser.close()
 finally:

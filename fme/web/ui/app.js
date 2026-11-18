@@ -5644,7 +5644,7 @@ async function loadCase() {
   } catch (e) { /* no case yet */ }
 }
 
-function countsFromDecisions() {
+function countsFromDecisions(forBar = false) {
   // Counted from the page's own copy of the decisions rather than from a
   // number the server sent earlier. Grading no longer re-reads the whole
   // case after every keystroke -- that is what made it fast -- so a count
@@ -5652,6 +5652,10 @@ function countsFromDecisions() {
   // bar sat there showing yesterday's figures.
   const counts = {};
   for (const file of files) {
+    // The bar counts as the gallery shows: a hidden container is not on it,
+    // so a case graded to the end reads 0 Uncategorized (v2026.11.334). The
+    // report and export dialogs count every file, since they export them.
+    if (forBar && file.container && !showContainers) continue;
     const decided = decisions[file.sha256];
     const code = decided ? decided.category : uncategorizedCode;
     counts[code] = (counts[code] || 0) + 1;
@@ -5659,9 +5663,24 @@ function countsFromDecisions() {
   return counts;
 }
 
+// Containers -- the archives, databases and caches media came out of -- are
+// not pictures, so the gallery hides them and the bar does not count them.
+// Said here, so they are never out of the count without a word.
+function hiddenContainersNote() {
+  if (showContainers) return "";
+  const n = paged ? ((pv.counts || {}).containers || 0)
+                  : files.filter(f => f.container).length;
+  if (!n) return "";
+  return `<span class="catchip containers-note" data-show-containers="1" ` +
+    `title="Archives, databases and caches other media came out of. They are ` +
+    `not pictures, so they are not shown or counted here; they are in the ` +
+    `manifest and the reports. Click to show them.">` +
+    `+ ${n.toLocaleString()} container(s) not shown</span>`;
+}
+
 function renderCategoryFilter(counts) {
   counts = counts || (paged ? ((pv.counts || {}).by_category || {})
-                            : countsFromDecisions());
+                            : countsFromDecisions(true));
   // A file with no row in the case is uncategorized, and so is one explicitly
   // set to that code; the count has to include both.
   const countOf = c => counts[c.code] || 0;
@@ -5677,7 +5696,9 @@ function renderCategoryFilter(counts) {
         `${c.key ? ` — press ${c.key} to apply it to the selected file` : ""}">` +
         `${c.key ? `<span class="key">${esc(c.key)}</span>` : ""}` +
         `${esc(c.name)} <span class="n">${n.toLocaleString()}</span></span>`;
-    }).join("");
+    }).join("") + hiddenContainersNote();
+  const reveal = $("cat-bar").querySelector("[data-show-containers]");
+  if (reveal) reveal.addEventListener("click", () => $("chip-containers").click());
 
   $("cat-bar").querySelectorAll("[data-cat-filter]").forEach(chip =>
     chip.addEventListener("click", () => {
@@ -6276,12 +6297,42 @@ async function autoStoreCheck() {
 $("store-scan").addEventListener("click", async () => {
   $("store-err").textContent = "";
   if (!jobId) { $("store-err").textContent = "Run an extraction first."; return; }
+  // Its own label back afterwards: the page's says "case", and this put
+  // back "run", so the button changed its name after its first use.
+  const label = $("store-scan").dataset.label ||
+                ($("store-scan").dataset.label = $("store-scan").textContent);
   $("store-scan").disabled = true;
   $("store-scan").textContent = "Checking…";
+  const forJob = jobId;
   try {
-    const d = await api("/api/store/scan", {
+    // On a thread on the server, asked after each second: a case of 200,000
+    // files is minutes against a shared store, and the button saying
+    // "Checking…" until a request came back was all there was to tell it
+    // had ended (v2026.11.334).
+    let state = await api("/api/store/scan", {
       method: "POST", headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({job: jobId})});
+      body: JSON.stringify({job: forJob, background: true})});
+    while (state.state === "running") {
+      await new Promise(r => setTimeout(r, 1000));
+      if (forJob !== jobId) return;                  // another case opened
+      state = await api(`/api/store/scan?job=${encodeURIComponent(forJob)}`);
+      if (state.state === "running") {
+        $("store-scan").textContent =
+          `Checking… ${Math.round(state.seconds || 0)} s`;
+      }
+    }
+    if (state.state !== "done") {
+      throw new Error(`The store check did not finish: ${state.error || state.state}`);
+    }
+    const d = state.result;
+    const categorized = (d.applied && d.applied.categorized) || 0;
+    const ended = `Store check finished in ${Math.round(state.seconds || 0)} s: ` +
+      `${d.checked.toLocaleString()} file(s) checked, ` +
+      `${d.matched.toLocaleString()} matched` +
+      (categorized ? `, ${categorized.toLocaleString()} categorized from the match` : "") +
+      `. The details are on the Hashes tab.`;
+    toast(esc(ended));
+    $("status").textContent = ended;
     $("store-result").innerHTML =
       `Checked ${d.checked.toLocaleString()} file(s)` +
       (d.locations && d.locations !== d.checked
@@ -6307,9 +6358,12 @@ $("store-scan").addEventListener("click", async () => {
     await loadCase();
     render();
     if (selectedPath) showDetails(selectedPath);
-  } catch (e) { $("store-err").textContent = e.message; }
+  } catch (e) {
+    $("store-err").textContent = e.message;
+    toast(esc(e.message), true);
+  }
   finally { $("store-scan").disabled = false;
-            $("store-scan").textContent = "Check this run against the store"; }
+            $("store-scan").textContent = label; }
 });
 
 $("store-contribute").addEventListener("click", async () => {

@@ -295,7 +295,7 @@ rest later — nothing needs reinstalling. `pytsk3` compiles against libtsk on
 Linux and macOS, so install `libtsk-dev` (or `brew install sleuthkit`) first;
 the file has the exact commands.
 
-Python 3.9 or newer.
+Python 3.11 or newer (3.12 recommended). The Windows release needs no Python at all.
 
 It opens **http://127.0.0.1:5001** in a browser.
 
@@ -625,7 +625,7 @@ and a full hash-set match against a finished job in about four seconds.
 | split raw (`.001`, `.002`, …) | none — segments are stitched automatically |
 | EnCase `.E01` / `.Ex01` | `pip install libewf-python` |
 | VMDK / VHD / QCOW | `pip install libvmdk-python libvhdi-python libqcow-python` |
-| AFF4, AD1 | not supported — convert to raw or E01 first |
+| AFF4 (including striped), AD1 | none — read by the vendored acquisition reader |
 
 `GET /api/media/capabilities` reports what the local install can actually
 open; the tab shows this before you start a job.

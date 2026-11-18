@@ -263,9 +263,27 @@ def scan_embedded(data: bytes, *, out: OutputManager, stats: dict, **kwargs) -> 
     found = _scan_embedded_inner(data, out=out, stats=stats, **kwargs)
     if found:
         label = (kwargs.get("source_label") or "").split("::")[0]
-        if label:
+        if label and not _is_media_itself(data, label, kwargs.get("signatures")):
             stats.setdefault("containers", set()).add(label)
     return found
+
+
+MEDIA_ITSELF = ("image", "video", "audio")
+
+
+def _is_media_itself(data: bytes, label: str, signatures) -> bool:
+    """A photo whose EXIF thumbnail came out of it, or a video with its cover
+    art, is still the photo or the video. Marked a container, it was left
+    out of the gallery -- the full picture hidden, its thumbnail the only
+    tile -- and counted Uncategorized with nothing to grade it from
+    (v2026.11.334). A container is the box media came out of, not media
+    that holds a smaller copy of itself."""
+    try:
+        category, _ext = sniff_category(data[:MAX_SIG_SPAN], label.rsplit("/", 1)[-1],
+                                        signatures)
+    except Exception:  # noqa: BLE001 - not sniffable is not media
+        return False
+    return category in MEDIA_ITSELF
 
 
 def _scan_lzc(data: bytes, *, out: OutputManager, stats: dict, signatures,

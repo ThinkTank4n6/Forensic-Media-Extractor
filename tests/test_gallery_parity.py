@@ -157,7 +157,7 @@ ASK_PAGE = """(st) => {
   // What the category bar and the Classify pane count, as this page counts
   // them (countsFromDecisions, renderClassification) -- the server's
   // aggregates must say the same for a case browsed a page at a time.
-  const byCategory = countsFromDecisions();
+  const byCategory = countsFromDecisions(true);   // as the bar counts
   const base = files.filter(f => passesBase(f));
   const classifyCat = {};
   base.forEach(f => { const c = categoryOf(f); classifyCat[c] = (classifyCat[c] || 0) + 1; });

@@ -5,10 +5,10 @@
 #   .venv/bin/pip install -r requirements.txt        # Linux / macOS
 #   .venv\Scripts\pip install -r requirements.txt    # Windows
 #
-# Python 3.9 or newer. The syntax would parse on 3.8, but the carve and the
-# report stop worker pools with shutdown(cancel_futures=True), which 3.9
-# added; on 3.8 a canceled run fails instead of stopping. pyproject.toml
-# says the same.
+# Python 3.11 or newer (since v2026.11.334; 3.12 is what the lab and the
+# Windows release run). 3.9 reached its end of life in October 2025 and 3.10
+# in October 2026. pyproject.toml says the same, and the program says so when
+# started on anything older.
 #
 # Only Flask is required to start. Everything else adds capability, and
 # this file installs all of it, because an examiner's machine should have
@@ -48,7 +48,10 @@ werkzeug>=3.0
 #   Debian/Ubuntu : sudo apt install libtsk-dev build-essential python3-dev
 #   Fedora/RHEL   : sudo dnf install libtsk-devel gcc python3-devel
 #   macOS         : brew install sleuthkit
-pytsk3>=20230125
+# 20260715 (July 2026) is the first with ready-made wheels for Windows, macOS
+# and Linux on every Python from 3.10 to 3.14, so nothing is compiled. It
+# still has no APFS pool support: APFS stays with the vendored reader.
+pytsk3>=20260715
 
 # ---------------------------------------------------------------------------
 # EnCase E01 / Ex01 images
@@ -82,7 +85,7 @@ libewf-python>=20231119
 # wheel and fail. If you keep a wheel cache beside this file, pin it with
 # markers on both the OS and the machine so ARM falls through to the sdist:
 #
-# whl_files/pytsk3-20230125-cp312-cp312-win_amd64.whl;        python_version == "3.12" and platform_system == "Windows" and platform_machine == "AMD64"
+# whl_files/pytsk3-20260715-cp312-cp312-win_amd64.whl;        python_version == "3.12" and platform_system == "Windows" and platform_machine == "AMD64"
 # whl_files/libewf_python-20231119-cp312-cp312-win_amd64.whl; python_version == "3.12" and platform_system == "Windows" and platform_machine == "AMD64"
 
 # ---------------------------------------------------------------------------

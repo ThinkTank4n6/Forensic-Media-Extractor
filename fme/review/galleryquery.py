@@ -441,7 +441,10 @@ def aggregates(files: list, decisions: dict, st: State) -> dict:
     """The counts the page draws around the gallery, in one pass:
 
     case_total     every file in the case
-    by_category    every file by its category (the category bar)
+    by_category    every file the gallery can show, by its category (the
+                   category bar): a container is left out while containers
+                   are hidden, as the gallery leaves it out, so a case
+                   graded to the end reads 0 Uncategorized (v2026.11.334)
     classify       {by_category, flags}: files passing the chips and the
                    search, by category; and by tag within the category
                    showing (the Classify pane, as renderClassification counts)
@@ -454,7 +457,8 @@ def aggregates(files: list, decisions: dict, st: State) -> dict:
     groups = set()
     for f in files:
         code, classified, tags = counted(f, decisions, st)
-        by_category[code] = by_category.get(code, 0) + 1
+        if code is not None:
+            by_category[code] = by_category.get(code, 0) + 1
         if is_known_software(f):
             known += 1
         if truthy(f.get("container")):
@@ -475,7 +479,10 @@ def counted(f: dict, decisions: dict, st: State) -> tuple:
     """What one file adds to aggregates(): (its category, its category again
     if it passes the chips and the search -- None if not -- and the flags it
     adds to the Classify pane). One judge for the full count and for the
-    count adjusted after a grading, so the two cannot disagree."""
+    count adjusted after a grading, so the two cannot disagree. Its category
+    is None for a container the gallery is hiding: not on the bar either."""
+    if truthy(f.get("container")) and not st.show_containers:
+        return None, None, ()
     code = category_of(f, decisions, st)
     if not passes_base(f, st, decisions):
         return code, None, ()
@@ -504,7 +511,8 @@ def _adjusted(previous: dict, files: list, old: dict, new: dict, st: State,
         for f in index.get(digest, ()):
             for decided, step in ((old, -1), (new, 1)):
                 code, classified, tags = counted(f, decided, st)
-                move(by_category, code, step)
+                if code is not None:
+                    move(by_category, code, step)
                 if classified is not None:
                     move(classify_cat, code, step)
                 for flag in tags:
