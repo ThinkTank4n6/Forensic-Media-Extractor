@@ -770,6 +770,14 @@ the page as soon as they no longer match the filter.">
       </div>
       <p class="hint" id="set-model-state" style="margin:4px 0 0;"></p>
       <div class="row" style="margin-top:6px;">
+        <div style="flex:1;"><label>FFmpeg, for video posters, scrubbing and playable copies
+          <span class="hint">an ffmpeg.exe built with NVIDIA support decodes on the
+          graphics card; leave blank to look on PATH</span></label>
+          <input type="text" id="set-ffmpeg" placeholder="C:\ffmpeg\bin\ffmpeg.exe"></div>
+        <button class="secondary" id="set-ffmpeg-browse" style="align-self:flex-end;">Browse…</button>
+      </div>
+      <p class="hint" id="set-ffmpeg-state" style="margin:4px 0 0;"></p>
+      <div class="row" style="margin-top:6px;">
         <div style="flex:1;"><label>Offline basemap for maps
           <span class="hint">a .pmtiles or .mbtiles file; it is copied in and
           hashed, and nothing is fetched from the internet</span></label>

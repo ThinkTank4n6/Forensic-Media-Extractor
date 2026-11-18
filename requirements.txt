@@ -182,3 +182,9 @@ reportlab>=4.0
 # neither present the window fails to open, so it is left for Linux users
 # to add on purpose (pip install pywebview, plus pygobject or qtpy).
 pywebview>=5.0; platform_system == "Windows" or platform_system == "Darwin"
+# The image models on the graphics cards (fme/engines/accel.py). On Windows
+# the DirectML build: any DirectX 12 card, NVIDIA included, with nothing else
+# to install. Elsewhere the processor build; for NVIDIA's CUDA instead, put
+# onnxruntime-gpu in its place.
+onnxruntime-directml>=1.18; platform_system == "Windows"
+onnxruntime>=1.18; platform_system != "Windows"

@@ -93,6 +93,7 @@ VENDOR = os.path.join(PROJECT, "fme", "vendor")
 # Imported by name at run time, which a freezer cannot see.
 hiddenimports = [
     "qnxprobe", "ewfprobe", "c2pareader", "exoprobe", "mediacarve", "impacket_ese",
+    "chromiumcacheprobe",
     "fme.cli", "fme.web.media_gui", "fme.web.manual",
     "fme.review.hashserver", "fme.review.recover",
 ]
@@ -108,6 +109,20 @@ for module in ("PIL", "cv2", "numpy", "flask", "waitress", "cheroot",
         hiddenimports.append(module)
     except Exception as exc:  # noqa: BLE001 - absent is fine
         print(f"[fme.spec] not bundling {module}: {exc}")
+
+# ONNX Runtime runs the image models on the graphics cards (accel.py). Its
+# providers -- DirectML.dll, the CUDA provider -- are libraries it loads by
+# name, which the import analysis cannot see; without them a build runs every
+# model on the processor and says only that no card provider is there.
+try:
+    from PyInstaller.utils.hooks import collect_dynamic_libs
+    binaries_extra = collect_dynamic_libs("onnxruntime")
+    datas += collect_data_files("onnxruntime")
+    hiddenimports += collect_submodules("onnxruntime.capi")
+    hiddenimports.append("onnxruntime")
+except Exception as exc:  # noqa: BLE001
+    binaries_extra = []
+    print(f"[fme.spec] not bundling onnxruntime: {exc}")
 
 # The licenses. The program's own, the notices, the license texts they cite,
 # and every bundled package's own license files: The Sleuth Kit's license
@@ -141,7 +156,7 @@ except Exception as exc:  # noqa: BLE001
 analysis = Analysis(
     [os.path.join(PROJECT, "packaging", "entrypoint.py")],
     pathex=[PROJECT, VENDOR],
-    binaries=[],
+    binaries=binaries_extra,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],

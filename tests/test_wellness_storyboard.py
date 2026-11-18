@@ -136,8 +136,14 @@ if video_ok:
           len(partial.get("frames") or []))
     leftovers = [n for n in os.listdir(os.path.dirname(folder)) if ".part" in n]
     check("and the decode leaves no half-made folder behind", not leftovers, leftovers)
+    # Since v2026.11.331 the tile maker makes every video's dozen frames when
+    # the case opens, so the small set may well be there: what matters is
+    # that it is its own folder, the dozen, and not the board's 48.
     small = video_frames.existing(case_dir, records[1]["sha256"])
-    check("apart from the frames frame matching uses", len(small) == 0, len(small))
+    check("apart from the frames frame matching uses",
+          video_frames.frames_dir(case_dir, records[1]["sha256"])
+          != video_frames.frames_dir(case_dir, records[1]["sha256"], True)
+          and len(small) in (0, video_frames.FRAME_COUNT), len(small))
 else:
     print("\n(storyboard not checked: OpenCV is not installed)")
 

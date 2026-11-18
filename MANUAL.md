@@ -454,6 +454,19 @@ than in the case, and "look inside these" means carving the image a second
 time. They cost disk, which is why it used to be off, and the trade is
 worth it.
 
+## Opening a case
+
+Each case in the list has an **Open** button. Pressing it shows a bar under
+the case and what is being done (reading the list of files, preparing them,
+restoring earlier work, counting), and the case opens on the review tab when
+it is ready. Pressing Open again while it opens does nothing; opening
+another case instead takes over.
+
+The prepared list of files is kept beside the manifest
+(`.fme_files_cache.json`), so the second time a case is opened is quicker.
+It is a copy for speed: it is used only while the manifest is unchanged and
+the program is the same release, and deleting it loses nothing.
+
 ## Why the gallery is quick now
 
 A gallery tile is about 180 pixels across; a phone photograph is 4,000. The
@@ -828,21 +841,90 @@ sees that it died, records that the file could not be read, and carries on.
 A decoder stuck in a loop is bounded by a two-minute limit, because a hang
 is as bad as a crash and harder to notice.
 
-The cost is a fraction of a second per video, and frames already extracted
-are reused rather than decoded again. In a frozen build there is no
-interpreter to call, so the decode happens in-process: the isolation is lost
-there, not the frames.
+Frames already extracted are reused rather than decoded again. A frozen
+build starts the same child process: it re-runs itself to do it.
+
+When an FFmpeg is found (see below) the decode is done by FFmpeg instead,
+which is a separate program too, so a clip that crashes it cannot take this
+program with it.
 
 ### Video
 
-Hovering a video tile seeks it — move across the tile to move through the
-clip. Only the header is fetched up front.
+Every video tile shows a **poster**, the first of a dozen frames taken
+evenly through the clip, and moving across the tile **scrubs** through those
+frames. They are made ahead of you, like the picture tiles: the page you are
+on first, then the next page, then the rest of the case. A tile whose frames
+are not made yet shows nothing for a moment and fills in by itself. This
+works for formats the browser cannot play as well (AVI, 3GP, most of what a
+DVR writes), because the server decodes them, not the browser.
 
-Formats the browser cannot play (most AVI, some MOV, MPEG-2, much of what a
-DVR writes) are decoded by OpenCV if `opencv-python-headless` is installed:
-the details pane shows a filmstrip. Frames are **generated images, not
-evidence** — their hashes are this tool's, not the file's — so they are
-written to `_frames/`, outside the recovered media.
+For precise scrubbing, open the clip in the details pane or the viewer.
+
+**A clip the browser cannot play** (HEVC where the browser has no decoder
+for it, AVI, a damaged carve) is played from a **display copy**: H.264 in an
+MP4, at most 1,280 pixels wide, made the first time it is opened and kept
+in `_playable/`. The player says when it is showing one. The copy is not
+evidence. It is never hashed, counted or exported; the file it was made
+from is.
+
+Frames, posters and display copies are **generated images, not evidence**:
+their hashes are this tool's, not the file's, so they are written to
+`_frames/` and `_playable/`, outside the recovered media.
+
+### FFmpeg and the graphics card
+
+Without FFmpeg, video is decoded by OpenCV on the processor, as before. With
+an FFmpeg built with NVIDIA support, posters, scrub frames and storyboards
+are decoded **on the graphics card** (NVDEC: H.264, HEVC, VP9, AV1), every
+card in the machine in turn, and display copies are encoded on it (NVENC).
+
+1. Install an FFmpeg with NVIDIA support, for example the "full" build from
+   gyan.dev (`winget install Gyan.FFmpeg`), and an up-to-date NVIDIA driver.
+2. In **File → Settings**, set "FFmpeg" to its `ffmpeg.exe`, or leave it
+   blank if `ffmpeg` is on PATH.
+3. **File → What is installed** says which FFmpeg is used, how many cards it
+   opened, and if none, why.
+
+FFmpeg is not shipped with this program: the builds with NVIDIA support are
+GPL-licensed, and the choice of which to install is the unit's.
+
+Without a card, video frames come from OpenCV; FFmpeg is then used only for
+display copies.
+
+### The graphics cards, for the image models
+
+**Search by what is in a picture** describes every picture of the case the
+first time it is used. That runs on the graphics cards through ONNX Runtime:
+
+- The Windows build carries ONNX Runtime with **DirectML**, which runs on any
+  DirectX 12 card, NVIDIA included, with nothing else to install.
+- Run from source with `onnxruntime-gpu` and NVIDIA's CUDA and cuDNN
+  libraries in its place, it uses **CUDA** instead.
+- With neither, ONNX Runtime runs it on the processor, several sessions at
+  once; with no ONNX Runtime at all, OpenCV, one picture at a time, as before.
+
+Every card is used, two sessions each. A card is used only once it has said
+it is running the model and been timed on one picture: Windows lists its
+software renderer among the cards, and it is left out that way. The
+descriptions are the same model's either way, so a case described before is
+not described again. **Finding faces** runs on several threads of the
+processor.
+
+**File → What is installed** (and `ForensicMediaExtractor doctor`) says
+where the models run.
+
+### Measuring it: bench
+
+From a command prompt in the program's folder:
+
+    ForensicMediaExtractor bench --case D:\cases\DC26-0001
+
+times, on that case's own files, each way this machine can describe
+pictures, find faces and make video frames, and prints how many a second,
+how many times faster than before, and how long the whole case would take.
+`-n 300` times 300 pictures (200 by default), `-v 12` twelve videos (10),
+`--only pictures` one job. Nothing is written into the case; the figures are
+kept as a JSON file whose name it prints.
 
 ---
 
@@ -1038,6 +1120,18 @@ match a set — and refuses to rebuild images stored as raw pixels, because a
 rebuilt file's hashes belong to this tool rather than to any evidence.
 Those are counted and reported as present.
 
+### Video Chrome kept in its cache
+
+Chrome on Android (and other Chromium browsers) keeps a video a web page
+streamed as MP4 fragments in its cache, which play nothing one at a time.
+These are rebuilt into ordinary MP4s during an ordinary scan, from a folder
+or from a phone extraction's zip or tar, by the vendored chromiumcacheprobe.
+The sample bytes are the cache's; only the container around them is
+written. When the cache no longer holds the clip's original header, its
+settings are taken from the samples themselves, and the file's note says so.
+Cached video shows the browser fetched it, not that anyone watched it, and
+the note says that too.
+
 ### Video an app streamed
 
 Streamed video does not arrive as a file. An Android app caches it as
@@ -1045,7 +1139,7 @@ numbered pieces, and a modern stream arrives as **separate video and audio
 streams of many short segments** with the order held in a cached manifest.
 A carve over that folder recovers fragments that will not open.
 
-These are joined during an ordinary scan — no separate step. The vendored
+These are joined during an ordinary scan — no separate step. That holds for a phone extraction delivered as a zip or tar as well as for a folder: until v2026.11.331 a zip or tar was read entry by entry and nothing in it was joined. The vendored
 reader is used, which resolves an item's name from the cache index and
 joins a DASH or HLS stream's segments in the order its manifest lists them;
 the older built-in rejoiner stays as a fallback, because a cache the

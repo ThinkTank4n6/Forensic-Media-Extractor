@@ -78,6 +78,8 @@ TOOLS = {
     "basemap": ("fme.engines.basemaps",
                 "offline maps for locator images: import, list, use, remove"),
     "db": ("fme.engines.db_extract", "extract media from a SQLite database"),
+    "bench": ("fme.engines.bench",
+              "time the graphics cards against the processor on your own files"),
     "doctor": ("", "report what is installed and where output goes"),
     "version": ("", "the version and a fingerprint of the code running"),
 }
@@ -286,6 +288,24 @@ def doctor() -> int:
                   f"({entry['what']})")
     except ImportError:
         pass
+
+    # Where the models and video would run: the cards, or the processor.
+    # Said here so a build that lost its graphics-card runtime is seen
+    # before a case is searched (v2026.11.332).
+    from fme.engines import accel as _accel, gpu_video as _gpu
+    from fme.review import settings as _settings2
+    _gpu.configure(_settings2.load().get("ffmpeg_path", ""))
+    told = _accel.status()
+    print(f"  models on   : {told['runtime'] or 'OpenCV only'}"
+          f"{' — ' + ', '.join(told['providers']) if told['providers'] else ''}")
+    if told["why"]:
+        print(f"    {told['why']}")
+    video = _gpu.info()
+    print("  video on    : " + (f"FFmpeg, {video['gpus']} NVIDIA card(s)" if video.get("cuda")
+                                else f"OpenCV on the processor; FFmpeg makes display "
+                                     f"copies only ({video['why']})"
+                                if video.get("ffmpeg") else f"OpenCV ({video['why']})"))
+    print("    measure it on your own files: bench --case <case folder>")
 
     state = vendor_fs.status()
     if vendored or state.get("available"):

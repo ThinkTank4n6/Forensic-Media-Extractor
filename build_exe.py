@@ -42,6 +42,7 @@ CAPABILITIES = [
     ("zstandard", "Snapchat content bundles", False),
     ("pillow_heif", "HEIC photographs, which iPhones write", False),
     ("webview", "a window of its own rather than a browser tab", False),
+    ("onnxruntime", "the image models on the graphics cards", False),
     ("pyvmdk", "VMDK images", False),
     ("pyvhdi", "VHD/VHDX images", False),
     ("pyqcow", "QCOW2 images", False),

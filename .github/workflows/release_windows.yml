@@ -61,6 +61,7 @@ jobs:
               "PIL": "thumbnails and pictures", "pillow_heif": "HEIC",
               "cv2": "video frames", "py7zr": "7z archives",
               "zstandard": "Snapchat bundles", "Crypto": "encrypted volumes",
+              "onnxruntime": "the image models on the graphics cards",
           }
           missing = []
           for module, what in needed.items():
@@ -70,6 +71,12 @@ jobs:
               except Exception as exc:
                   print(f"  {module:<12} NO   {what}: {exc}")
                   missing.append(module)
+          if not missing:
+              import onnxruntime
+              providers = onnxruntime.get_available_providers()
+              print(f"  onnxruntime providers: {providers}")
+              if "DmlExecutionProvider" not in providers:
+                  missing.append("onnxruntime's DirectML provider (onnxruntime-directml)")
           sys.exit(f"Not building without: {', '.join(missing)}" if missing else 0)
 
       - name: Build the portable folder

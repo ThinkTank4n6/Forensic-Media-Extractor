@@ -180,20 +180,9 @@ class CaseRegistry:
         drifts from the evidence is worse than no count.
         """
         out_dir = os.path.abspath(out_dir)
-        manifest_path = os.path.join(out_dir, "manifest.json")
-        files = images = videos = 0
-        source = ""
-        if os.path.isfile(manifest_path):
-            try:
-                with open(manifest_path, "r", encoding="utf-8") as fh:
-                    manifest = json.load(fh)
-                records = manifest.get("files", [])
-                files = len(records)
-                images = sum(1 for r in records if r.get("category") == "image")
-                videos = sum(1 for r in records if r.get("category") == "video")
-                source = manifest.get("summary", {}).get("image", "")
-            except (OSError, json.JSONDecodeError, ValueError):
-                pass
+        facts = _manifest_facts(out_dir)
+        files, images, videos = facts["files"], facts["images"], facts["videos"]
+        source = facts["source"]
 
         categorized = 0
         case_path = os.path.join(out_dir, "case.db")
@@ -214,7 +203,7 @@ class CaseRegistry:
             except sqlite3.Error:
                 pass
 
-        mark = fingerprint(out_dir)
+        mark = facts["fingerprint"]
         with self._lock:
             self._con.execute(
                 "UPDATE cases SET files=?, images=?, videos=?, categorized=?, "
@@ -340,6 +329,52 @@ class CaseRegistry:
             self._con.close()
 
 
+# What a manifest says, kept until the manifest changes. refresh() read the
+# whole manifest twice -- for the counts and again for the fingerprint -- on
+# every open and every minute and a half of grading: on a case of 220,000
+# files, 160 MB of JSON parsed while every other request waited for the
+# interpreter (v2026.11.331). The counts and the fingerprint change only when
+# the manifest does, so they are kept against its size and modification time.
+_FACTS: dict = {}
+_FACTS_LOCK = threading.Lock()
+
+
+def _manifest_facts(case_dir: str) -> dict:
+    manifest_path = os.path.join(os.path.abspath(case_dir), "manifest.json")
+    empty = {"files": 0, "images": 0, "videos": 0, "source": "", "fingerprint": ""}
+    try:
+        info = os.stat(manifest_path)
+    except OSError:
+        return empty
+    key = (info.st_size, info.st_mtime_ns)
+    with _FACTS_LOCK:
+        held = _FACTS.get(manifest_path)
+        if held and held[0] == key:
+            return dict(held[1])
+    try:
+        with open(manifest_path, "r", encoding="utf-8") as fh:
+            manifest = json.load(fh)
+    except (OSError, json.JSONDecodeError, ValueError):
+        return empty
+    records = manifest.get("files") or []
+    source = (manifest.get("summary", {}) or {}).get("image", "")
+    facts = {
+        "files": len(records),
+        "images": sum(1 for r in records if r.get("category") == "image"),
+        "videos": sum(1 for r in records if r.get("category") == "video"),
+        "source": source,
+        "fingerprint": hashlib.sha256("|".join([
+            str(source), str(len(records)), str(records[0].get("sha256", "")),
+            str(records[-1].get("sha256", ""))]).encode("utf-8")).hexdigest()[:32]
+        if records else "",
+    }
+    with _FACTS_LOCK:
+        _FACTS[manifest_path] = (key, facts)
+        while len(_FACTS) > 64:
+            _FACTS.pop(next(iter(_FACTS)))
+    return dict(facts)
+
+
 def fingerprint(case_dir: str) -> str:
     """What identifies this case wherever it is.
 
@@ -348,20 +383,7 @@ def fingerprint(case_dir: str) -> str:
     last of them. A path is not an identity -- the whole point here is that
     the case has moved.
     """
-    manifest_path = os.path.join(case_dir, "manifest.json")
-    try:
-        with open(manifest_path, "r", encoding="utf-8") as fh:
-            manifest = json.load(fh)
-    except (OSError, json.JSONDecodeError, ValueError):
-        return ""
-    records = manifest.get("files") or []
-    if not records:
-        return ""
-    source = (manifest.get("summary", {}) or {}).get("image", "")
-    parts = [str(source), str(len(records)),
-             str(records[0].get("sha256", "")),
-             str(records[-1].get("sha256", ""))]
-    return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()[:32]
+    return _manifest_facts(case_dir)["fingerprint"]
 
 
 def _details_from(folder: str):

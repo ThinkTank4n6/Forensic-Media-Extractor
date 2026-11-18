@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "forensic-media-extractor"
-version = "2026.11.330"
+version = "2026.11.332"
 description = "Recover images, video and audio from forensic images, devices, folders, packages and databases, and export for review platforms"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -41,6 +41,8 @@ full = [
     "argon2-cffi>=23.1",       # LUKS2 Argon2 keyslots
     "texture2ddecoder>=1.0",   # iOS GPU textures (ASTC/ETC/PVRTC), isolated
     "pyliblzfse>=0.4.1",       # the LZFSE most iOS textures are packed with
+    "onnxruntime-directml>=1.18; platform_system == 'Windows'",  # the models on the cards
+    "onnxruntime>=1.18; platform_system != 'Windows'",           # the models, ONNX Runtime
 ]
 # Virtual machine disk formats, kept separate because a build failure in one
 # of these should not stop the rest installing.

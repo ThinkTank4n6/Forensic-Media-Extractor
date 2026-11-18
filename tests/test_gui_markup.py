@@ -417,8 +417,12 @@ print(f"   it writes a snapshot            {'yes' if saves else 'NO -- it would 
 # responding. It swaps pre-extracted frames instead.
 print("\nscrubbing a video:")
 scrub_at = script.find("function wireScrub(")
-scrub = script[scrub_at:scrub_at + 4000] if scrub_at >= 0 else ""
-uses_frames = "/api/frames" in scrub
+scrub = script[scrub_at:scrub_at + 7000] if scrub_at >= 0 else ""
+# Through the one queue every frame request goes through since v2026.11.331
+# (framesFor), which is what asks /api/frames.
+queue_at = script.find("function framesFor(")
+uses_frames = ("/api/frames" in scrub or
+               ("framesFor(" in scrub and "/api/frames" in script[queue_at:queue_at + 3500]))
 ok &= uses_frames
 print(f"   shows extracted frames                 "
       f"{'yes' if uses_frames else 'NO -- it would seek the video'}")
@@ -460,9 +464,9 @@ print(f"   and released on the way out            {'yes' if released else 'NO'}"
 # Done carelessly that is worse than the wait: a page of five hundred tiles
 # asking at once occupies the server while the examiner is trying to grade.
 print("\nfetching frames ahead of the cursor:")
-prefetch_at = script.find("function prefetchFrames(")
+prefetch_at = script.find("function framesFor(")
 prefetch = script[prefetch_at:prefetch_at + 2500] if prefetch_at >= 0 else ""
-pump = script[script.find("async function pumpFrames("):][:1200]
+pump = script[script.find("function pumpFrames("):][:1200]
 
 limited = "FRAME_WORKERS" in script and "framesBusy < FRAME_WORKERS" in pump
 ok &= limited
@@ -478,7 +482,8 @@ abandons = "framesGeneration" in script and "!== framesGeneration" in pump
 ok &= abandons
 print(f"   a page change abandons the old queue   {'yes' if abandons else 'NO'}")
 
-once_only = "framesReady.has(relPath)" in prefetch
+once_only = ("framesReady.get(relPath)" in prefetch
+             and "frameWaiting.get(relPath)" in prefetch)
 ok &= once_only
 print(f"   each clip is asked for once            {'yes' if once_only else 'NO'}")
 

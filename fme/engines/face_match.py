@@ -126,11 +126,12 @@ def faces_in(path: str, detector_path: str, recognizer_path: str) -> list:
         return _faces(picture, detector_path, recognizer_path)
 
 
-def _faces(picture, detector_path: str, recognizer_path: str) -> list:
+def _faces(picture, detector_path: str, recognizer_path: str,
+           detector=None, recognizer=None) -> list:
     import numpy as np
 
     height, width = picture.shape[:2]
-    detector = _detector(detector_path)
+    detector = detector or _detector(detector_path)
     detector.setInputSize((width, height))
     try:
         _, found = detector.detect(picture)
@@ -139,7 +140,7 @@ def _faces(picture, detector_path: str, recognizer_path: str) -> list:
     if found is None:
         return []
 
-    recognizer = _recognizer(recognizer_path)
+    recognizer = recognizer or _recognizer(recognizer_path)
     faces = []
     for row in found[:MAX_FACES_PER_FILE]:
         confidence = float(row[-1])
@@ -175,26 +176,72 @@ def similarity(left, right) -> float:
     return max(0.0, min(1.0, total))
 
 
+_local = _threading.local()
+
+
+def _faces_here(path: str, detector_path: str, recognizer_path: str) -> list:
+    """faces_in() with this thread's own detector and recognizer.
+
+    OpenCV's detector and recognizer keep state between calls (the input
+    size, the network's buffers), which is why faces_in() takes one lock for
+    the whole program. A scan of a case ran one picture at a time because of
+    it, on a 32-core machine (v2026.11.332). Each thread of a scan keeps its
+    own pair instead, and OpenCV lets go of the interpreter while it works,
+    so they run side by side.
+    """
+    import cv2
+    import numpy as np
+
+    from fme.engines.content_search import _file_key
+    key = (_file_key(detector_path), _file_key(recognizer_path))
+    tools = getattr(_local, "tools", None)
+    if tools is None or tools[0] != key:
+        tools = (key, cv2.FaceDetectorYN_create(detector_path, "", DETECT_SIZE),
+                 cv2.FaceRecognizerSF_create(recognizer_path, ""))
+        _local.tools = tools
+    try:
+        with open(path, "rb") as fh:
+            blob = np.frombuffer(fh.read(), dtype=np.uint8)
+        picture = cv2.imdecode(blob, cv2.IMREAD_COLOR)
+    except Exception:  # noqa: BLE001
+        return []
+    if picture is None or picture.size == 0:
+        return []
+    return _faces(picture, detector_path, recognizer_path, tools[1], tools[2])
+
+
+def scan_workers() -> int:
+    return max(1, min(16, (os.cpu_count() or 4) // 2))
+
+
 def scan(out_dir: str, rows: list, detector_path: str, recognizer_path: str,
-         progress=None) -> dict:
-    """Find the faces in every picture of a case."""
+         progress=None, workers: int = 0) -> dict:
+    """Find the faces in every picture of a case, on several threads."""
+    from concurrent.futures import ThreadPoolExecutor
+
     ready, why = available(detector_path, recognizer_path)
     if not ready:
         return {"ok": False, "error": why, "by_sha256": {}}
 
     found, total = {}, 0
     wanted = [row for row in rows if row.get("category") == "image"]
-    for index, row in enumerate(wanted, start=1):
-        path = os.path.join(out_dir, row.get("out_path")
-                            or row.get("rel_path") or "")
-        if not os.path.isfile(path):
-            continue
-        faces = faces_in(path, detector_path, recognizer_path)
-        if faces:
-            found[row.get("sha256", "")] = faces
-            total += len(faces)
-        if progress and index % 25 == 0:
-            progress(index, len(wanted))
+    paths = []
+    for row in wanted:
+        path = os.path.join(out_dir, row.get("out_path") or row.get("rel_path") or "")
+        if os.path.isfile(path):
+            paths.append((row.get("sha256", ""), path))
+    done = 0
+    with ThreadPoolExecutor(max_workers=workers or scan_workers(),
+                            thread_name_prefix="faces") as pool:
+        for (digest, _path), faces in zip(
+                paths, pool.map(lambda item: _faces_here(item[1], detector_path,
+                                                         recognizer_path), paths)):
+            done += 1
+            if faces:
+                found[digest] = faces
+                total += len(faces)
+            if progress and done % 25 == 0:
+                progress(done, len(wanted))
 
     return {"ok": True, "pictures": len(wanted), "with_faces": len(found),
             "faces": total, "by_sha256": found,

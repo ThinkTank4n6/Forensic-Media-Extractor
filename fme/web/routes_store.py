@@ -355,6 +355,7 @@ def api_store_scan():
         JOBS[data["job"]]["hash_matches"] = merged
         for entry in JOBS[data["job"]]["files"]:
             entry["hash_sets"] = merged.get(entry.get("sha256"), [])
+        _entries_changed(data["job"])
     # A file the stash and the store grade differently is reported as a
     # disagreement "neither has been applied" -- and was then auto-graded
     # anyway, by whichever code sorted first.
@@ -441,6 +442,7 @@ def api_hashsets_scan():
         JOBS[job_id]["hash_matches"] = merged
         for entry in JOBS[job_id]["files"]:
             entry["hash_sets"] = merged.get(entry.get("sha256"), [])
+        _entries_changed(job_id)
     applied = _apply_hash_categories(job_id, lookup) \
         if data.get("autocategorize", True) else {"categorized": 0}
     return jsonify({"ok": True, "csv": csv_path,

@@ -3,32 +3,28 @@
     {
       "path": "qnxprobe.py",
       "name": "qnxprobe",
-      "version": "1.77",
+      "version": "1.80",
       "upstream": "https://github.com/abrignoni/qnxprobe",
-      "sha256": "266f5503a0d84224ff8135371ec557b730350498e22134fdfeb8c0a8632e4940",
+      "sha256": "d55d5354959ab688da3cc950b4aa01ed6d8b17fcb3ce7ed99d932da4a6016353",
       "licence": "MIT",
       "licence_file": "LICENSE-qnxprobe",
-      "note": "Reads the file systems the rest of this program cannot: QNX6, QNX4, ETFS, EFS, QNX IFS, F2FS, SquashFS, JFFS2, UBI/UBIFS, YAFFS1/2, Btrfs, XFS, ReFS and more. Copied verbatim; fix upstream and re-vendor rather than editing here.",
+      "note": "Reads the file systems the rest of this program cannot: QNX6, QNX4, ETFS, EFS, QNX IFS, F2FS, SquashFS, JFFS2, UBI/UBIFS, YAFFS1/2, Btrfs, XFS, ReFS and more. Copied verbatim from the 1.80 release archive; fix upstream and re-vendor rather than editing here.",
       "copyright": "Copyright (c) 2026 Alexis Brignoni",
       "notice_in_file": true,
-      "commit": "e9122fa8ed147a9473afbad15f8f3f9e84e7c6a0",
-      "commit_date": "2026-11-04T13:07:47-05:00",
-      "via": "GLEAPP 2026.5.7 gleapp/vendor/qnxprobe.py (byte-identical, same SHA-256 GLEAPP records)"
+      "received": "2026-11-18: release archive the author issued, copied verbatim"
     },
     {
       "path": "ewfprobe.py",
       "name": "ewfprobe",
-      "version": "0.15.0",
+      "version": "0.15.1",
       "upstream": "https://github.com/abrignoni/ewfprobe",
-      "sha256": "4169e397ee125591f4245791b5d7427ea3c2fd7b44e390a4a127a7548d39c2f6",
+      "sha256": "f596b57072ec9fbb555d1d1439851a030b2b99c6c370f11b71a48226797b4017",
       "licence": "MIT",
       "licence_file": "LICENSE-ewfprobe",
       "note": "Reads an EnCase/EWF .E01 acquisition without libewf. Copied verbatim; fix upstream and re-vendor rather than editing here.",
-      "commit": "4af1a54a223edbce12693b29fb3838b63a26b4f2",
-      "commit_date": "2026-10-23T11:44:00-04:00",
-      "matches_upstream_record": true,
       "copyright": "Copyright (c) 2026 Alexis Brignoni",
-      "notice_in_file": false
+      "notice_in_file": false,
+      "received": "2026-11-18: release archive the author issued, copied verbatim"
     },
     {
       "path": "LICENSE-qnxmount",
@@ -53,28 +49,28 @@
     {
       "path": "exoprobe.py",
       "name": "exoprobe",
-      "version": "0.2.1",
+      "version": "0.2.2",
       "upstream": "https://github.com/abrignoni/exoprobe",
-      "sha256": "1e07771cdc2edfd165ea5c9dee26a926961a55c801435cab5237ec8c17f77c41",
+      "sha256": "4963885b078ebc294f82c9d2980a654d5b057b3673bacf357b083917fc76401b",
       "licence": "MIT",
       "licence_file": "LICENSE-exoprobe",
       "copyright": "Copyright (c) 2026 Alexis Brignoni",
-      "why": "Rebuilds video an Android app streamed. ExoPlayer stores one video as numbered pieces with its name in a separate index, so the pieces are unplayable and nameless until they are joined. Also joins DASH and HLS segments in the order the cached manifest lists them."
+      "why": "Rebuilds video an Android app streamed. ExoPlayer stores one video as numbered pieces with its name in a separate index, so the pieces are unplayable and nameless until they are joined. Also joins DASH and HLS segments in the order the cached manifest lists them.",
+      "received": "2026-11-18: release archive the author issued, copied verbatim"
     },
     {
       "path": "mediacarve.py",
       "name": "mediacarve",
-      "version": "0.14.0",
+      "version": "0.14.1",
       "upstream": "https://github.com/abrignoni/mediacarve",
-      "sha256": "4b6155b0c4b1f4e938abc8cb7fcb5964a4155fbbce171c6217d5b0fa4b9b5c68",
+      "sha256": "64716c7751c4f0c0fc2c2b8bb85d1070bb9ea5f3afbcf5b180b6fb383d39a382",
       "licence": "MIT",
       "licence_file": "LICENSE-mediacarve",
-      "note": "Copied verbatim from GLEAPP's vendored copy, which records the same SHA-256 for upstream commit 81dbe9e7189a50f94f1e3e002096b3e66aee7845. Fix upstream and re-vendor rather than editing here.",
-      "commit": "81dbe9e7189a50f94f1e3e002096b3e66aee7845",
-      "commit_date": "2026-10-16T20:38:59-04:00",
+      "note": "Copied verbatim from the 0.14.1 release archive. Fix upstream and re-vendor rather than editing here.",
       "copyright": "Copyright (c) 2026 Alexis Brignoni",
       "notice_in_file": false,
-      "why": "The carve's judge of where a file starts and ends (fme/engines/carve_judge.py). It walks each format's own structure before claiming bytes, never lets a length it could not confirm hide a later file, and says how each length was arrived at: header, parsed or capped. That label is the manifest's bounded column."
+      "why": "The carve's judge of where a file starts and ends (fme/engines/carve_judge.py). It walks each format's own structure before claiming bytes, never lets a length it could not confirm hide a later file, and says how each length was arrived at: header, parsed or capped. That label is the manifest's bounded column.",
+      "received": "2026-11-18: release archive the author issued, copied verbatim"
     },
     {
       "path": "impacket_ese.py",
@@ -91,6 +87,19 @@
       "note": "Reads Windows.edb (ESE) for the Windows Search index; see fme/engines/winsearch.py. Only ever run in a child process (fme/engines/isolated.py): it loops forever on a truncated file. Its licence (Apache 1.1, clause 3) requires an acknowledgment in end-user documentation; MANUAL.md's credits carry it. Copied verbatim; fix upstream and re-vendor rather than editing here.",
       "copyright": "Copyright (c) 2003-2023 Fortra (impacket); adaptation by DLEAPP",
       "notice_in_file": true
+    },
+    {
+      "path": "chromiumcacheprobe.py",
+      "name": "chromiumcacheprobe",
+      "version": "0.3.0",
+      "upstream": "https://github.com/abrignoni/chromiumcacheprobe",
+      "sha256": "e21af15239dc7b9b490be7ad74f6c2bcf0571f41b02ba99c3790aea43183b748",
+      "licence": "MIT",
+      "licence_file": "LICENSE-chromiumcacheprobe",
+      "copyright": "Copyright (c) 2026 Alexis Brignoni; Copyright (c) 2026 Forensik.IT GmbH",
+      "notice_in_file": false,
+      "received": "2026-11-18: release archive the author issued, copied verbatim",
+      "why": "Rebuilds the H.264 video Chrome on Android keeps in its Simple Cache as MP4 fragments, which play nothing one by one. Sample bytes are copied as stored; only the container is written, and a clip whose header was rebuilt from its samples says so (fme/engines/chromecache.py)."
     }
   ],
   "derived": [

@@ -494,6 +494,17 @@
   }
   .case:hover { border-color: var(--accent); }
   .case.missing { opacity: .55; cursor: default; }
+  /* Opening: the row says so, with how far it has got. */
+  .case { flex-wrap: wrap; }
+  .case .opencase { min-width: 72px; }
+  .case.opening { border-color: var(--accent); cursor: progress; }
+  .case .openprog { flex-basis: 100%; display: none; }
+  .case.opening .openprog { display: block; }
+  .case .openprog .progress-outer { margin: 2px 0 4px; height: 8px; }
+  .case .openprog .status { display: flex; justify-content: space-between; gap: 12px; }
+  .case .openprog .what { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .case .openprog .pct { font-variant-numeric: tabular-nums; flex: none; }
+  .caselist.busy .case:not(.opening) .opencase { opacity: .5; pointer-events: none; }
   .case .who { flex: 1; min-width: 0; }
   .case .num { font-weight: 600; font-size: 13px; }
   .case .sub {

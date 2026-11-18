@@ -191,9 +191,13 @@ def api_gallery_query():
         answer["files"] = shown[offset:offset + limit]
         # The page after this one, made first by the tile maker, so it is
         # ready when the examiner gets there (v2026.11.326).
-        _prefill_ahead(job_id, [f.get("rel_path") for f in
-                                shown[offset + limit:offset + 2 * limit]
-                                if f.get("category") == "image"])
+        # This page's videos too: a video's poster is a decoded frame, and
+        # one not made yet is a blank tile (v2026.11.331).
+        _prefill_ahead(job_id, [f.get("rel_path") for f in shown[offset:offset + limit]
+                                if f.get("category") == "video"]
+                       + [f.get("rel_path") for f in
+                          shown[offset + limit:offset + 2 * limit]
+                          if f.get("category") in ("image", "video")])
     if data.get("facets"):
         answer["facets"] = galleryquery.CACHE.facets(rows, decisions, version, raw, state)
     else:
@@ -334,8 +338,7 @@ def api_preview():
         return err
     with JOBS_LOCK:
         job = JOBS.get(job_id)
-    record = next((f for f in (job or {}).get("files", [])
-                   if f.get("rel_path") == rel), None)
+    record = _job_record(job_id, rel)
     digest = (record or {}).get("sha256") or ""
     if not job or not digest:
         return error_response(KeyError("Unknown file"), status=404)
@@ -377,12 +380,11 @@ def api_storyboard():
     with JOBS_LOCK:
         job = JOBS.get(job_id)
         out_dir = job["out_dir"] if job else None
-        record = next((f for f in (job or {}).get("files", [])
-                       if f.get("rel_path") == rel), None)
+    record = _job_record(job_id, rel)
     digest = (record or {}).get("sha256") or ""
     if not digest or not out_dir:
         return error_response(KeyError("Unknown file"), status=404)
-    if not video_frames.available():
+    if not video_frames.decodable():
         return jsonify({"ok": False, "available": False,
                         "message": video_frames.UNAVAILABLE, "frames": []})
     result = video_frames.extract(full, out_dir, digest, count=video_frames.BOARD_COUNT,
@@ -416,7 +418,83 @@ def api_frame():
                                    board=request.args.get("board") == "1")
     if not 0 <= index < len(frames):
         return error_response(FileNotFoundError("No such frame"), status=404)
-    return send_file(frames[index], mimetype="image/jpeg")
+    # Made once and never changed (a set is renamed into place whole), so the
+    # browser may keep it: scrubbing back over a tile asked again each time.
+    return send_file(frames[index], mimetype="image/jpeg", max_age=86400,
+                     conditional=True)
+
+
+@app.route("/api/poster")
+def api_poster():
+    """A video's tile: the first of its scrub frames.
+
+    Never decoded here. A poster not made yet answers 404 at once, and the
+    clip goes to the front of the tile maker's queue; the page asks again.
+    Decoding inside the request is what held a connection for seconds per
+    tile and left the examiner's grading waiting behind it (v2026.11.331).
+    """
+    job_id = request.args.get("job", "")
+    rel = (request.args.get("file") or "").strip()
+    with JOBS_LOCK:
+        job = JOBS.get(job_id)
+        out_dir = job["out_dir"] if job else ""
+    record = _job_record(job_id, rel) if job else None
+    digest = (record or {}).get("sha256") or ""
+    if not digest or (record or {}).get("category") != "video":
+        return error_response(KeyError("Unknown video"), status=404)
+    frames = video_frames.existing(out_dir, digest)
+    if frames:
+        return send_file(frames[0], mimetype="image/jpeg", max_age=86400,
+                         conditional=True)
+    _prefill_ahead(job_id, [rel], replace=False)
+    response = jsonify({"ok": False, "pending": True})
+    response.status_code = 404
+    response.headers["Retry-After"] = "2"
+    return response
+
+
+@app.route("/api/playable", methods=["POST"])
+def api_playable():
+    """A copy of a clip the browser could not play, that it can: H.264 in an
+    MP4, made by FFmpeg on the NVIDIA card where there is one
+    (fme/engines/gpu_video.py). A display copy, beside the case in
+    _playable/, never hashed, counted or exported."""
+    data = request.get_json(force=True) or {}
+    job_id = str(data.get("job") or "")
+    rel = str(data.get("file") or "")
+    full, err = _job_file(job_id, rel)
+    if err:
+        return err
+    with JOBS_LOCK:
+        out_dir = (JOBS.get(job_id) or {}).get("out_dir", "")
+    record = _job_record(job_id, rel) or {}
+    digest = record.get("sha256") or ""
+    if not digest or record.get("category") != "video":
+        return error_response(KeyError("Unknown video"), status=404)
+    # Answered at once: made on a thread of its own, and the page asks again
+    # until it is ready (_playable_state).
+    state = _playable_state(full, out_dir, digest)
+    if state["state"] == "failed":
+        return jsonify({"ok": False, "error": state.get("error", "")})
+    if state["state"] == "making":
+        return jsonify({"ok": False, "pending": True})
+    return jsonify({"ok": True, "how": state.get("how", "kept"),
+                    "url": f"/api/playable/file?job={job_id}&sha={digest}"})
+
+
+@app.route("/api/playable/file")
+def api_playable_file():
+    job_id = request.args.get("job", "")
+    digest = request.args.get("sha", "")
+    with JOBS_LOCK:
+        job = JOBS.get(job_id)
+    if job is None or not re.fullmatch(r"[0-9a-f]{64}", digest):
+        return error_response(KeyError("Unknown file"), status=404)
+    from fme.engines import gpu_video
+    path = gpu_video.playable_path(job["out_dir"], digest)
+    if not os.path.isfile(path):
+        return error_response(FileNotFoundError("No display copy"), status=404)
+    return send_file(path, mimetype="video/mp4", conditional=True)
 
 
 @app.route("/api/details")

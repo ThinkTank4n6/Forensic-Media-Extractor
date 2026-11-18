@@ -178,15 +178,17 @@ def api_content_search():
     library = (case.derived(cache) or {}) if case else {}
     images = [f for f in job["files"] if f.get("category") == "image"]
 
-    fresh = 0
+    # Every picture not described yet, at once: on the graphics cards where
+    # there are any, several at a time (content_search.describe_many).
+    wanted = {}
     for entry in images:
         digest = entry.get("sha256", "")
-        if not digest or digest in library:
-            continue
-        described = content_search.describe(
-            os.path.join(job["out_dir"], entry.get("rel_path", "")), model)
+        if digest and digest not in library and digest not in wanted.values():
+            wanted[os.path.join(job["out_dir"], entry.get("rel_path", ""))] = digest
+    fresh = 0
+    for path, described in content_search.describe_many(list(wanted), model).items():
         if described:
-            library[digest] = described
+            library[wanted[path]] = described
             fresh += 1
     if case is not None and fresh:
         # Merged into what is saved now, not saved over it: two searches at
@@ -291,6 +293,7 @@ def api_screening_scan():
                 entry["skin"] = found.get("skin")
                 entry["skin_band"] = found.get("band") or ""
                 entry["faces"] = found.get("faces", -1)
+        _entries_changed(job_id)
     return jsonify({"ok": True, **result})
 
 
@@ -410,6 +413,7 @@ def api_similarity_scan():
         for entry in JOBS[job_id]["files"]:
             entry["similar_group"] = result["membership"].get(entry["rel_path"])
             entry["similar_count"] = group_sizes.get(entry["similar_group"], 1)
+        _entries_changed(job_id)
     noticed = imaging.noticed()
     return jsonify({"ok": True, "csv": csv_path, "decode_notes": noticed,
                     **{k: result[k] for k in ("images", "hashed", "undecodable",
@@ -435,21 +439,29 @@ def api_frames():
     with JOBS_LOCK:
         job = JOBS.get(job_id)
         out_dir = job["out_dir"] if job else None
-    record = next((f for f in (job or {}).get("files", [])
-                   if f.get("rel_path") == rel), None)
+    record = _job_record(job_id, rel)
     digest = (record or {}).get("sha256") or ""
     if not digest or not out_dir:
         return error_response(KeyError("Unknown file"), status=404)
 
-    if not video_frames.available():
+    if not video_frames.decodable():
         return jsonify({"ok": False, "available": False,
                         "message": video_frames.UNAVAILABLE, "frames": []})
 
-    result = video_frames.extract(full, out_dir, digest)
+    if request.args.get("cached") == "1":
+        # Asked ahead of the pointer: what is made, never a decode in the
+        # request. The tile maker is told to do it first instead.
+        made = video_frames.existing(out_dir, digest)
+        if not made:
+            _prefill_ahead(job_id, [rel], replace=False)
+        result = {"ok": bool(made), "frames": made, "pending": not made}
+    else:
+        result = video_frames.extract(full, out_dir, digest)
     frames = [f"/api/frame?job={job_id}&sha={digest}&n={i}"
               for i in range(len(result.get("frames", [])))]
     return jsonify({"ok": result.get("ok", False), "available": True,
                     "frames": frames, "duration": result.get("duration", 0),
+                    "pending": bool(result.get("pending")),
                     "error": result.get("error", "")})
 
 

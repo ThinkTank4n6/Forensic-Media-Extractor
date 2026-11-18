@@ -114,7 +114,9 @@ if sync_playwright is not None:
             page.evaluate("([a, b]) => { openCase(a); setTimeout(() => openCase(b), 300); }",
                           [A, B])
             page.wait_for_timeout(3500)
-            shown = page.evaluate("() => files.map(f => f.sha256)")
+            # Paged (FME_PAGED_THRESHOLD=0), the page's files are its pages.
+            page.wait_for_function("() => !paged || pv.files.length > 0", timeout=5000)
+            shown = page.evaluate("() => (paged ? pv.files : files).map(f => f.sha256)")
             check("in the page, the slower earlier open does not take over the later one",
                   sorted(shown) == sorted(b_files), len(shown))
             browser.close()

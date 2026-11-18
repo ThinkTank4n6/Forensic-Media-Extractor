@@ -220,6 +220,14 @@ SIZED_ENGINES = frozenset({"filesystem", "folder", "vendor-fs", "package",
                            # a 2.7 KB clip was dropped as noise (v2026.11.317)
                            "logical"})
 
+# Files a cache reader wrote whole from the cache's own structure: their size
+# is not a carve's guess, so the floor that throws out tiny false matches is
+# not for them. A two-second clip Chrome cached is 2 KB, and was dropped as
+# noise with nothing said (v2026.11.331).
+SIZED_SIGNATURES = frozenset({"embedded:chrome-cache-fragments",
+                              "embedded:chrome-cache-mp4",
+                              "embedded:exoplayer-cache"})
+
 
 # Large enough for any field this program writes, and small enough to be a
 # C long on every platform (sys.maxsize overflows csv on 64-bit Windows).
@@ -947,7 +955,9 @@ class OutputManager:
         # usually a false match. A file whose size a file system recorded is
         # that size: an allocated 5 KB clip in a phone's camera folder was
         # dropped here like noise, with nothing counted and nothing said.
-        floor = 0 if meta.get("engine") in SIZED_ENGINES else _floor(category)
+        floor = (0 if meta.get("engine") in SIZED_ENGINES
+                 or meta.get("signature") in SIZED_SIGNATURES
+                 else _floor(category))
         if size < floor:
             self.undersized_dropped += 1
             _silent_unlink(tmp)

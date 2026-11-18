@@ -432,9 +432,7 @@ def _sync_stash(case, job_id: str, digests) -> None:
         return
     try:
         from fme.review import stash as _stash
-        with JOBS_LOCK:
-            rows = (JOBS.get(job_id) or {}).get("files") or []
-            by_digest = {f.get("sha256"): f for f in rows}
+        by_digest = _job_index(job_id, "sha256")
         names = {c["code"]: c["name"] for c in case.categories()}
         keep, drop = [], []
         for digest in digests:
@@ -601,6 +599,7 @@ def api_capabilities():
         "mixed_install": media_core.mixed_install(),
         "similarity": similarity.status(),
         "video_frames": video_frames.status(),
+        "models_on": _accel_status(),
         "imaging": imaging.status(),
         "decode_notes": imaging.noticed(),
         "lava_installed": bool(lava_launch.find_lava()),
@@ -918,6 +917,319 @@ def case_records(out_dir: str) -> tuple:
             _RECORDS_CACHE.pop(next(iter(_RECORDS_CACHE)))
     with entry.lock:
         return entry.refresh()
+
+
+#### Opening a case, with progress (v2026.11.331) ############################
+#
+# Opening a case of 220,000 files read a 160 MB manifest, built an entry for
+# every file, restored the earlier hash matches and similarity, and recounted
+# the case -- ten seconds and more inside one request, with nothing on the
+# screen. It looked hung; a second click started it again. The page now asks
+# for it in the background and polls /api/cases/opening, which says what it
+# is doing and how far through it is.
+#
+# The entries are also kept beside the manifest (OPEN_CACHE), keyed to the
+# manifest's size and time and to this build: building them was half the
+# time, and they are the same on every open.
+OPENING: dict = {}
+OPENING_LOCK = threading.Lock()
+OPEN_CACHE = ".fme_files_cache.json"
+
+
+def _opening(job_id: str, **changes) -> None:
+    with OPENING_LOCK:
+        if job_id in OPENING:
+            OPENING[job_id].update(changes)
+
+
+def _open_cache_key(manifest_path: str) -> dict:
+    info = os.stat(manifest_path)
+    return {"size": info.st_size, "mtime_ns": info.st_mtime_ns,
+            "build": media_core.RELEASE,
+            "formats": sorted(PREVIEWABLE) + ["|"] + sorted(CONVERTIBLE)}
+
+
+def _read_with_progress(path: str, job_id: str, stage: str) -> bytes:
+    size = os.path.getsize(path) or 1
+    parts, read = [], 0
+    with open(path, "rb") as fh:
+        while True:
+            piece = fh.read(8 * 1024 * 1024)
+            if not piece:
+                break
+            parts.append(piece)
+            read += len(piece)
+            _opening(job_id, stage=stage, done=read, total=size, unit="bytes")
+    return b"".join(parts)
+
+
+def _case_entries(out_dir: str, job_id: str) -> tuple:
+    """(entries, summary, file count) for a case folder: from the kept
+    entries when they still match the manifest, otherwise built afresh and
+    kept for next time."""
+    manifest_path = os.path.join(out_dir, "manifest.json")
+    cache_path = os.path.join(out_dir, OPEN_CACHE)
+    key = _open_cache_key(manifest_path)
+    try:
+        if os.path.isfile(cache_path):
+            kept = json.loads(_read_with_progress(
+                cache_path, job_id, "Reading the case's prepared file list"))
+            if kept.get("key") == key and isinstance(kept.get("files"), list):
+                return kept["files"], dict(kept.get("summary") or {}), len(kept["files"])
+    except (OSError, ValueError):
+        pass        # rebuilt below; a damaged copy is only a slower open
+    manifest = json.loads(_read_with_progress(
+        manifest_path, job_id, "Reading the case's list of files"))
+    rows = manifest.get("files", [])
+    total = len(rows)
+    entries = []
+    for n, row in enumerate(rows):
+        entries.append(_job_file_entry(row))
+        if n % 5000 == 0:
+            _opening(job_id, stage="Preparing the files for the gallery",
+                     done=n, total=total, unit="files")
+    summary = dict(manifest.get("summary", {}))
+    try:
+        # Serialized now, before anything adds to the entries; written in
+        # the background so the open does not wait on the disk.
+        text = json.dumps({"key": key, "summary": summary, "files": entries},
+                          separators=(",", ":"))
+
+        def keep():
+            tmp = cache_path + f".{os.getpid()}.{threading.get_ident()}.part"
+            try:
+                with open(tmp, "w", encoding="utf-8") as fh:
+                    fh.write(text)
+                os.replace(tmp, cache_path)
+            except OSError:
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+        threading.Thread(target=keep, daemon=True, name="open-cache").start()
+    except (TypeError, ValueError):
+        pass
+    return entries, summary, total
+
+
+def _open_case(out_dir: str, job_id: str) -> dict:
+    """A finished case turned back into a job: what /api/cases/open answers.
+    Progress goes to OPENING[job_id] when the page is polling for it."""
+    entries, summary, count = _case_entries(out_dir, job_id)
+    _opening(job_id, stage="Restoring earlier work on the case", done=0,
+             total=0, unit="")
+    book = _registry()
+    known = book.get(out_dir)
+    # What is on disk now, not what the run wrote then: a ProjectVIC.json
+    # written by an export after the run was reported as missing on every
+    # reopen, and one since deleted as present (v2026.11.320, U11).
+    summary["reopened"] = True
+    summary.pop("project_vic", None)
+    for where in (out_dir, os.path.join(out_dir, "export"), os.path.join(out_dir, "report")):
+        try:
+            found = sorted(n for n in os.listdir(where)
+                           if n.lower().startswith("projectvic") and n.lower().endswith(".json"))
+        except OSError:
+            continue
+        if found:
+            summary["project_vic"] = os.path.join(where, found[0])
+            break
+    with JOBS_LOCK:
+        JOBS[job_id] = {
+            "status": "done", "done": 1, "total": 1,
+            "recovered": count, "phase": "finished",
+            "files": entries,
+            "summary": summary, "error": None,
+            "path": summary.get("image", ""), "out_dir": out_dir,
+            "examiner": known.get("examiner", ""),
+            "case_number": known.get("case_number", ""),
+            "_cancel": threading.Event(), "reopened": True,
+        }
+        LAST_JOB["id"] = job_id
+    # Bring back what earlier sessions worked out, so a reopened case is
+    # where it was left rather than where it started.
+    case = _case_for(job_id)
+    restored = {}
+    if case is not None:
+        matches = case.derived("hash_matches")
+        similarity_rows = case.derived("similarity")
+        screened = case.derived("screening")
+        if screened:
+            for entry in JOBS[job_id]["files"]:
+                found = screened.get(entry.get("sha256"))
+                if found:
+                    entry["skin"] = found.get("skin")
+                    entry["skin_band"] = found.get("band") or ""
+                    entry["faces"] = found.get("faces", -1)
+        restored = {"hash_matches": len(matches),
+                    "similarity": len(similarity_rows)}
+        with JOBS_LOCK:
+            if matches:
+                JOBS[job_id]["hash_matches"] = matches
+                for entry in JOBS[job_id]["files"]:
+                    if entry.get("sha256") in matches:
+                        entry["hash_sets"] = matches[entry["sha256"]]
+            if similarity_rows:
+                by_path = {row["out_path"]: row for row in similarity_rows.values()
+                           if row.get("out_path")}
+                JOBS[job_id]["similarity"] = {
+                    "hashes": {p: r["dhash"] for p, r in by_path.items() if r.get("dhash")},
+                    "phashes": {p: r["phash"] for p, r in by_path.items() if r.get("phash")},
+                    "membership": {p: r["group"] for p, r in by_path.items()
+                                   if r.get("group")},
+                    "stack_membership": {p: r["stack"] for p, r in by_path.items()
+                                         if r.get("stack")},
+                    "max_distance": 8, "restored": True,
+                }
+                sizes = {}
+                for row in similarity_rows.values():
+                    group = row.get("group")
+                    if group:
+                        sizes[group] = sizes.get(group, 0) + 1
+                for entry in JOBS[job_id]["files"]:
+                    row = similarity_rows.get(entry.get("sha256"))
+                    if row:
+                        entry["similar_group"] = row.get("group")
+                        entry["similar_count"] = sizes.get(row.get("group"), 1)
+            _entries_changed(job_id)
+
+    # The tiles, made ahead from now on: a case opened from the list had
+    # every one made while the examiner waited for its page (v2026.11.326).
+    _start_prefill(job_id)
+    _opening(job_id, stage="Counting the case", done=0, total=0, unit="")
+    book.touch(out_dir)
+    book.refresh(out_dir)
+    return {"ok": True, "job_id": job_id, "out_dir": out_dir,
+            "files": count, "restored": restored, "case": book.get(out_dir)}
+
+
+OPENING_KEPT = 600      # seconds a finished open's answer waits to be collected
+
+
+def _open_case_in_background(out_dir: str, job_id: str) -> None:
+    now = time.time()
+    with OPENING_LOCK:
+        # An answer nobody came for -- the page was closed while the case
+        # opened -- is dropped rather than kept for the life of the program.
+        for stale in [k for k, v in OPENING.items()
+                      if v.get("ready") and now - v.get("finished", now) > OPENING_KEPT]:
+            OPENING.pop(stale, None)
+        OPENING[job_id] = {"stage": "Starting", "done": 0, "total": 0,
+                           "unit": "", "ready": False, "error": None,
+                           "out_dir": out_dir, "started": time.time()}
+
+    def work():
+        try:
+            result = _open_case(out_dir, job_id)
+            _opening(job_id, ready=True, result=result, stage="Ready",
+                     finished=time.time())
+        except ValueError as exc:
+            # json's errors are ValueErrors: a manifest cut short or damaged.
+            LOG.warning("opening %s failed: %s", out_dir, exc)
+            _opening(job_id, ready=True, finished=time.time(), error=(
+                f"manifest.json in {out_dir} could not be read -- it is damaged "
+                f"or was cut short ({exc}). If the run was interrupted, "
+                f"\"rebuild its list\" in the case list puts it back."))
+        except OSError as exc:
+            LOG.warning("opening %s failed: %s", out_dir, exc)
+            _opening(job_id, ready=True, finished=time.time(),
+                     error=f"the case folder could not be read: {exc}")
+        except Exception as exc:  # noqa: BLE001 - said to the page, not lost
+            LOG.exception("opening %s failed", out_dir)
+            _opening(job_id, ready=True, finished=time.time(),
+                     error=f"{type(exc).__name__}: {exc}")
+    threading.Thread(target=work, daemon=True, name="open-case").start()
+
+
+# A job's files by path and by SHA-256, for requests that need one file.
+# /api/frames, /api/preview and every grading's stash sync walked the whole
+# list -- 220,000 entries -- for one, holding the job lock while they did.
+# A job's list is replaced, never edited in place, so an index made for one
+# list object stays right until the list is replaced.
+_INDEXES: dict = {}
+_INDEXES_LOCK = threading.Lock()
+
+
+def _entries_changed(job_id: str) -> None:
+    """Say that a job's entries were changed in place. Call with JOBS_LOCK
+    held, after the change.
+
+    Everything kept about a job's files -- the gallery's filtered pages and
+    counts (galleryquery.CACHE), the facet tables, _job_index -- is kept
+    against the list object, because a list is replaced, never edited. A
+    similarity run, a hash store check and a screening edit the entries of
+    the same list instead. Until v2026.11.332 their write to case.db moved
+    the decisions' version and the counts were made again; since the counts
+    are adjusted for the decisions that changed, and those runs change none,
+    the gallery counted "0 groups" after a run had found two
+    (tests/test_gallery_after_inplace.py). A new list of the same entries
+    tells every one of them at once.
+    """
+    job = JOBS.get(job_id)
+    if job is not None and isinstance(job.get("files"), list):
+        job["files"] = list(job["files"])
+
+
+def _job_index(job_id: str, key: str = "rel_path") -> dict:
+    with JOBS_LOCK:
+        rows = (JOBS.get(job_id) or {}).get("files") or []
+    with _INDEXES_LOCK:
+        held = _INDEXES.get((job_id, key))
+        if held is not None and held[0] is rows:
+            return held[1]
+    index = {}
+    for row in rows:
+        index.setdefault(row.get(key), row)
+    with _INDEXES_LOCK:
+        _INDEXES[(job_id, key)] = (rows, index)
+        if len(_INDEXES) > 16:
+            _INDEXES.pop(next(iter(_INDEXES)))
+    return index
+
+
+def _job_record(job_id: str, rel_path: str):
+    return _job_index(job_id, "rel_path").get(rel_path)
+
+
+# Display copies being made (/api/playable), by the copy's path. Made inside
+# the request until v2026.11.332, which held one of the browser's six
+# connections and a server thread for the whole transcode -- minutes for a
+# long clip on a processor -- the stall the frame queue was built to remove.
+PLAYABLE: dict = {}
+PLAYABLE_LOCK = threading.Lock()
+
+
+def _playable_state(full: str, out_dir: str, digest: str) -> dict:
+    """{state: ready|making|failed, ...}, starting the copy if nothing is."""
+    from fme.engines import gpu_video
+    target = gpu_video.playable_path(out_dir, digest)
+    if os.path.isfile(target) and os.path.getsize(target):
+        with PLAYABLE_LOCK:
+            done = PLAYABLE.pop(target, None) or {}
+        return {"state": "ready", "how": done.get("how", "kept")}
+    with PLAYABLE_LOCK:
+        held = PLAYABLE.get(target)
+        if held and held["state"] == "failed":
+            # Said once, then forgotten: a Settings change may make it work.
+            PLAYABLE.pop(target, None)
+            return dict(held)
+        if held:
+            return dict(held)
+        PLAYABLE[target] = {"state": "making", "started": time.time()}
+
+    def make():
+        made = gpu_video.make_playable(full, out_dir, digest)
+        with PLAYABLE_LOCK:
+            PLAYABLE[target] = ({"state": "ready", "how": made.get("how", "kept")}
+                                if made.get("ok") else
+                                {"state": "failed", "error": made.get("error", "")})
+    threading.Thread(target=make, daemon=True, name="playable").start()
+    return {"state": "making"}
+
+
+def _accel_status() -> dict:
+    from fme.engines import accel
+    return accel.status()
 
 
 def _job_file_entry(f: dict) -> dict:
@@ -2191,61 +2503,130 @@ PREFILL_AHEAD_MAX = 1500
 
 
 def _prefill_workers() -> int:
-    return max(2, min(6, (os.cpu_count() or 4) // 2))
+    # Half the cores, from two to sixteen: a forensic workstation has thirty-two
+    # and the tiles were made on at most six (v2026.11.331).
+    return max(2, min(16, (os.cpu_count() or 4) // 2))
+
+
+def _video_workers() -> int:
+    """Posters and scrub frames made ahead at once. Each holds a decode slot
+    (video_frames), so this is what the machine can decode, less one kept
+    for the clip the examiner is waiting for."""
+    from fme.engines import gpu_video
+    # And no more than the machine's budget for background decoding
+    # (gpu_video.process_budget): without a card that was seven OpenCV
+    # children at once on 32 cores, more than the budget FFmpeg keeps to.
+    return max(1, min(gpu_video.slots() - 1, gpu_video.process_budget()))
+
+
+def _lower_this_thread() -> None:
+    """The tile maker's threads below the examiner's. On Linux nice() lowers
+    the calling thread only; Windows needs SetThreadPriority, and the tile
+    maker ran there at full priority on up to sixteen threads (v2026.11.332).
+    macOS has no per-thread call Python can reach; its threads stay as they
+    are."""
+    if sys.platform.startswith("linux"):
+        try:
+            os.nice(10)
+        except OSError:
+            pass
+    elif os.name == "nt":
+        try:
+            import ctypes
+            kernel = ctypes.windll.kernel32
+            kernel.SetThreadPriority(kernel.GetCurrentThread(), -1)  # BELOW_NORMAL
+        except (AttributeError, OSError):
+            pass
+
+
+def _tile_missing(out_dir: str, rel: str, video_sha: str = "") -> bool:
+    if video_sha:
+        return not video_frames.existing(out_dir, video_sha)
+    return not os.path.isfile(_thumb_path(out_dir, rel))
 
 
 class _Prefill:
-    def __init__(self, job_id: str, out_dir: str, rels: list):
+    """The tiles of one case, made ahead: a picture's 360-pixel copy, and a
+    video's poster and scrub frames (the dozen frames /api/frames serves,
+    the first of which is its poster). Pictures and videos have workers of
+    their own, so a 4K clip decoding does not hold up a page of pictures."""
+
+    def __init__(self, job_id: str, out_dir: str, rels: list, videos: dict):
         self.job_id, self.out_dir = job_id, out_dir
-        self.rels, self.index = rels, 0
-        self.ahead = collections.deque()
+        self.videos = videos                  # rel_path -> sha256, for videos
+        self.queues = {
+            kind: {"rels": [r for r in rels if (r in videos) == (kind == "video")],
+                   "index": 0, "ahead": collections.deque()}
+            for kind in ("image", "video")}
         self.queued = set()
         self.lock = threading.Lock()
         self.made = 0
         self.running = 0
+        self.kind_running = {"image": 0, "video": 0}
 
-    def next_path(self):
+    def next_path(self, kind: str = "image"):
+        queue = self.queues[kind]
         with self.lock:
-            while self.ahead:
-                rel = self.ahead.popleft()
+            while queue["ahead"]:
+                rel = queue["ahead"].popleft()
                 if rel not in self.queued:
                     self.queued.add(rel)
                     return rel
-            while self.index < len(self.rels):
-                rel = self.rels[self.index]
-                self.index += 1
+            while queue["index"] < len(queue["rels"]):
+                rel = queue["rels"][queue["index"]]
+                queue["index"] += 1
                 if rel not in self.queued:
                     self.queued.add(rel)
                     return rel
         return None
 
-    def want(self, rels) -> int:
-        """Put these first. What was ahead before goes: the examiner has
-        moved on, and the in-order sweep still reaches it."""
+    def want(self, rels, videos=None, replace: bool = True) -> int:
+        """Put these first. With replace, what was ahead before goes: the
+        examiner has moved to another page, and the in-order sweep still
+        reaches it. Without, these go in front of it -- a tile asking for its
+        own poster must not drop the rest of the page it is on."""
         added = 0
         with self.lock:
-            self.ahead.clear()
-            for rel in rels[:PREFILL_AHEAD_MAX]:
+            if videos:
+                self.videos.update(videos)
+            if replace:
+                for queue in self.queues.values():
+                    queue["ahead"].clear()
+            for rel in reversed(rels[:PREFILL_AHEAD_MAX]):
                 if rel and rel not in self.queued:
-                    self.ahead.append(rel)
+                    kind = "video" if rel in self.videos else "image"
+                    ahead = self.queues[kind]["ahead"]
+                    if not replace and rel in ahead:
+                        ahead.remove(rel)
+                    ahead.appendleft(rel)
                     added += 1
         return added
 
-    def work(self) -> None:
-        if sys.platform.startswith("linux"):
-            try:
-                os.nice(10)         # this thread only, on Linux
-            except OSError:
-                pass
+    def pending(self, kind: str) -> bool:
+        queue = self.queues[kind]
+        with self.lock:
+            return bool(queue["ahead"]) or queue["index"] < len(queue["rels"])
+
+    def work(self, kind: str = "image") -> None:
+        _lower_this_thread()
         try:
             while True:
                 with JOBS_LOCK:
                     if self.job_id not in JOBS:      # the case was closed
                         return
-                rel = self.next_path()
+                rel = self.next_path(kind)
                 if rel is None:
                     return
                 full = os.path.join(self.out_dir, rel)
+                if kind == "video":
+                    sha = self.videos.get(rel) or ""
+                    if not sha or not _tile_missing(self.out_dir, rel, sha):
+                        continue
+                    if os.path.isfile(full) and video_frames.extract(
+                            full, self.out_dir, sha, background=True).get("ok"):
+                        with self.lock:
+                            self.made += 1
+                    continue
                 if os.path.isfile(_thumb_path(self.out_dir, rel)):
                     continue
                 if os.path.isfile(full) and _make_thumb(self.out_dir, full, rel):
@@ -2254,57 +2635,73 @@ class _Prefill:
         finally:
             with self.lock:
                 self.running -= 1
+                self.kind_running[kind] -= 1
                 last = self.running == 0
             if last:
                 if self.made:
-                    LOG.info("thumbnails ready for %d picture(s)", self.made)
+                    LOG.info("tiles ready for %d picture(s) and video(s)", self.made)
                 with _PREFILLS_LOCK:
                     if _PREFILLS.get(self.job_id) is self:
                         _PREFILLS.pop(self.job_id, None)
 
-    def start(self, workers: int) -> None:
+    def start(self, workers: int, video_workers: int = 0) -> None:
+        plan = [("image", workers)]
+        if video_workers and self.pending("video"):
+            plan.append(("video", video_workers))
         with self.lock:
-            self.running += workers
-        for n in range(workers):
-            threading.Thread(target=self.work, daemon=True,
-                             name=f"thumbs-{n}").start()
+            self.running += sum(n for _kind, n in plan)
+            for kind, count in plan:
+                self.kind_running[kind] += count
+        for kind, count in plan:
+            for n in range(count):
+                threading.Thread(target=self.work, args=(kind,), daemon=True,
+                                 name=f"{'thumbs' if kind == 'image' else 'frames'}-{n}").start()
 
 
 def _start_prefill(job_id: str, force: bool = False, sweep: bool = True,
                    ahead=None):
     """The job's tile maker, started if it is not already running. With
-    sweep, every picture in the case, in order, after whatever is asked for
-    ahead; without, only what is asked for."""
+    sweep, every picture and video in the case, in order, after whatever is
+    asked for ahead; without, only what is asked for."""
     with JOBS_LOCK:
         job = JOBS.get(job_id)
         if not job:
             return None
-        rels = [e.get("rel_path") or "" for e in job.get("files", [])
-                if e.get("category") == "image" and e.get("rel_path")] \
-            if sweep else []
+        rows = job.get("files", [])
         out_dir = job.get("out_dir", "")
+    videos = {e.get("rel_path"): e.get("sha256") for e in rows
+              if e.get("category") == "video" and e.get("rel_path") and e.get("sha256")}
+    rels = [e.get("rel_path") or "" for e in rows
+            if e.get("category") in ("image", "video") and e.get("rel_path")] \
+        if sweep else []
     with _PREFILLS_LOCK:
         held = _PREFILLS.get(job_id)
         if held is not None and not force:
             return held
-        prefill = _Prefill(job_id, out_dir, rels)
+        prefill = _Prefill(job_id, out_dir, rels, videos)
         if ahead:
             prefill.want(ahead)
         _PREFILLS[job_id] = prefill
-    prefill.start(_prefill_workers())
+    prefill.start(_prefill_workers(),
+                  _video_workers() if video_frames.decodable() else 0)
     return prefill
 
 
-def _prefill_ahead(job_id: str, rels) -> None:
+def _prefill_ahead(job_id: str, rels, replace: bool = True) -> None:
     """The gallery's next page, made first. Starts the maker if it was not
-    running (a case opened before this release, or one whose sweep ended)."""
+    running (a case opened before this release, or one whose sweep ended).
+    replace=False puts these in front of what is already asked for, for one
+    tile asking for itself."""
     rels = [r for r in rels if r]
     if not rels:
         return
-    out_dir = ""
     with JOBS_LOCK:
         out_dir = (JOBS.get(job_id) or {}).get("out_dir", "")
-    missing = [r for r in rels if not os.path.isfile(_thumb_path(out_dir, r))]
+    index = _job_index(job_id, "rel_path")
+    videos = {r: (index.get(r) or {}).get("sha256") or "" for r in rels
+              if (index.get(r) or {}).get("category") == "video"}
+    missing = [r for r in rels if _tile_missing(out_dir, r, videos.get(r, ""))
+               and (r not in videos or videos[r])]
     if not missing:
         return
     with _PREFILLS_LOCK:
@@ -2314,11 +2711,21 @@ def _prefill_ahead(job_id: str, rels) -> None:
         # rather than stat every picture in the case again.
         _start_prefill(job_id, force=True, sweep=False, ahead=missing)
         return
-    prefill.want(missing)
+    prefill.want(missing, videos, replace=replace)
     with prefill.lock:
         idle = prefill.running == 0
+        no_video_workers = prefill.kind_running["video"] == 0
+        no_image_workers = prefill.kind_running["image"] == 0
     if idle:                    # its workers ended while this was added
-        prefill.start(_prefill_workers())
+        prefill.start(_prefill_workers(),
+                      _video_workers() if video_frames.decodable() else 0)
+        return
+    # One kind's workers can finish while the other's run: a page of
+    # pictures made, the case's videos still going, and the reverse.
+    if videos and no_video_workers and video_frames.decodable():
+        prefill.start(0, _video_workers())
+    if no_image_workers and any(r not in videos for r in missing):
+        prefill.start(_prefill_workers(), 0)
 
 
 def _frame_matches_for(job_id: str, digest: str) -> list:
@@ -2735,6 +3142,16 @@ THUMB_EDGE = 360          # what a gallery tile actually needs
 
 # The routes that live in their own files now. Imported last, so every
 # name they bind from this module already exists.
+# The FFmpeg named in Settings, and what it can do asked once now, in the
+# background: asking means opening each NVIDIA card, which should not be the
+# first page's wait (fme/engines/gpu_video.py).
+try:
+    from fme.engines import gpu_video as _gpu_video
+    _gpu_video.configure(settings.load().get("ffmpeg_path", ""))
+    threading.Thread(target=_gpu_video.info, daemon=True, name="ffmpeg-probe").start()
+except Exception:  # noqa: BLE001 - video then decodes as it did, on OpenCV
+    pass
+
 from fme.web import routes_case  # noqa: E402,F401
 from fme.web import routes_media  # noqa: E402,F401
 from fme.web import routes_setup  # noqa: E402,F401

@@ -33,6 +33,7 @@ PROVIDES = {
     "cryptography": "cryptography", "py7zr": "py7zr",
     "zstandard": "zstandard", "waitress": "waitress", "cheroot": "cheroot",
     "reportlab": "reportlab", "webview": "pywebview",
+    "onnxruntime": "onnxruntime",
 }
 # Imported only as a fallback for one of the above, or not a package at all.
 ALTERNATIVES = {
@@ -41,9 +42,11 @@ ALTERNATIVES = {
     "backports": "backports.zstd, accepted in place of zstandard",
     "compression": "the standard library's zstd, Python 3.14 and later",
     "PyInstaller": "build only (requirements: pyproject [build])",
+    "brotli": "optional to the vendored chromiumcacheprobe: without it, a "
+              "Brotli-compressed cache body is reported as not decodable",
 }
 VENDORED = {"ewfprobe", "qnxprobe", "exoprobe", "c2pareader", "mediacarve",
-            "impacket_ese"}
+            "impacket_ese", "chromiumcacheprobe"}
 
 
 def requirements(name: str) -> set:

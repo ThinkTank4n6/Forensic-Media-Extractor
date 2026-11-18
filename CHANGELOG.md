@@ -4,6 +4,199 @@ The release number is in `VERSION` and is reported by both GUIs, the console
 banner, and the Project VIC and LAVA exports, so a report can be traced back
 to the build that produced it.
 
+## v2026.11.332 — The image models on the graphics cards, and the open issues
+
+### The graphics cards, for the models
+
+- **Search by what is in a picture runs on the cards.** The content model
+  (DINOv2) ran through OpenCV one picture at a time on the processor, about
+  150 to 200 ms a picture, so a case of 200,000 pictures was hours before its
+  first search answered. It now runs through ONNX Runtime
+  (`fme/engines/accel.py`): on every NVIDIA card through CUDA where
+  onnxruntime-gpu and NVIDIA's libraries are installed, otherwise through
+  DirectML (any DirectX 12 card, with nothing else to install -- what the
+  Windows build carries), otherwise ONNX Runtime on the processor, a session
+  per eight cores. Two sessions a card, with the pictures read and shrunk on
+  other threads meanwhile. The model takes one picture per run (its batch
+  size is fixed), so this is how the cards are kept busy.
+- **The descriptions are the model's own either way**: ONNX Runtime and
+  OpenCV agree to 0.00017 in the raw output, and the kept descriptions to a
+  cosine of 0.9999. A case described before is not described again.
+- **A card that is not one is not used.** ONNX Runtime falls back to the
+  processor without saying so when a card's libraries are missing, and
+  DirectML lists Windows' software renderer among the cards. Each session is
+  asked where it runs, and each card is timed on one picture: slower than the
+  processor, or four times slower than the fastest card, and it is let go.
+- **Faces are found on several threads**, each with its own detector and
+  recognizer, instead of one picture at a time behind one lock. They stay on
+  OpenCV: the detector's decoding of its output lives inside OpenCV, and
+  rewriting it is not a change to make without real faces to check it on
+  (AUDIT Open 5).
+- **`ForensicMediaExtractor bench --case <folder>`** times each way this
+  machine can do the three jobs the cards change -- the content model, faces,
+  video frames -- on the examiner's own files, says where each ran, and
+  projects the whole case. Nothing is written into the case.
+- `doctor` and What is installed say where the models and the video run.
+- **Without a card, video frames come from OpenCV again**, as before
+  v2026.11.331: measured, FFmpeg on the processor was 0.7 times OpenCV's
+  speed for ordinary clips. FFmpeg decodes frames on a card, and makes the
+  display copies.
+
+### The open issues, ranked and fixed
+
+1. **Background video decoding competed with the examiner** (from .331). The
+   tile maker's FFmpegs started at normal priority, as many at once as decode
+   slots times processes per clip: twenty on a 32-core machine with two cards,
+   each with a thread per core. Reproduced in twenty lines
+   (`tools/repro/repro_background_decode_priority.py`: 20 at once, 100 of 100
+   at normal priority). They now start below normal, as the OpenCV children
+   always did, share one budget for the machine (two per card, or one per
+   eight cores) and, on the processor, their share of its threads. The tile
+   maker's own threads are lowered on Windows too. (`tests/test_background_decode_priority.py`,
+   which fails on .331 as the script does.)
+2. **A display copy was made inside the request**, holding one of the
+   browser's six connections and a server thread for the whole transcode. It
+   is made on a thread now; the page asks again each second.
+3. **Every grading on a large case cost about a second of the server.** The
+   page asks for the counts and the next page after each grading, and both
+   were made again from every file: on 220,000 files the counts took 0.7 to
+   0.9 s and the filtered list 0.9 s. A grading changes the files graded, so
+   only those are tested again (`galleryquery.counted`, `Cache.visible`); the
+   answers are held to what a full count gives after each of 40 random
+   gradings under six filters (`tests/test_counts_adjusted.py`). The Filters
+   pane's background warm-up now pauses between pieces: while it ran, a
+   grading took about a second, and now takes 6 to 36 ms, with the next page
+   and its counts about 30 ms. The first grading after an open still costs
+   about a second, once.
+4. **Decode slots were counted once**, so an FFmpeg set in Settings after the
+   first decode left the cards at the processor's count until a restart.
+5. **Two things were never let go**: an open nobody collected, and a lock per
+   clip ever given a display copy.
+6. **A browser test failed two runs in six under load**: it read a row in
+   three steps, and the open could finish between them. It reads once now.
+7. **A browser test could not pass with every case paged**
+   (`FME_PAGED_THRESHOLD=0`): `test_grading_lands_right` read the unpaged
+   file list, which is empty when paged (it failed the same way on .331).
+   It reads the page's own list now.
+
+Also: since the counts are now adjusted, a similarity run, a store check or
+a screening -- which change entries in place and no grade -- would have left
+the gallery counting "0 groups" after a run found two; those now replace the
+list, which every cache is kept against (`media_gui._entries_changed`,
+`tests/test_gallery_after_inplace.py`, checked by disabling it).
+
+From the code review before packaging: video tile workers without a card are
+held to the same budget as background FFmpeg (one per eight cores, not one
+per four); a card that fails part way through describing a case says so once
+in the log instead of leaving pictures silently undescribed; and the page
+stops asking for a display copy once the player that wanted it is closed (the
+copy is still made, and is there the next time).
+
+Not fixed here, because they need what only the workstation has: the examiner
+sessions, real fixtures, multi-device Btrfs, face search on real faces, the
+vector basemap drawn (docs/AUDIT.md, Open).
+
+## v2026.11.331 — Opening a case, video in the gallery, and the new readers
+
+### Opening a case
+
+- **Each case in the list has an Open button**, and opening shows a bar under
+  the case with what is being done: reading the list of files, preparing
+  them, restoring earlier work, counting. Opening a case of 220,000 files was
+  ten seconds and more inside one request with nothing on screen; a second
+  click started it again. It now runs in the background
+  (`/api/cases/opening`), and a second press of the same case does nothing.
+- **A second open is quicker.** The prepared list of files is kept beside the
+  manifest (`.fme_files_cache.json`), used only while the manifest is
+  unchanged and the release is the same; building it was half the open.
+- **The case list's counts no longer re-read the manifest.** Refreshing them
+  parsed the whole manifest twice, on every open and every minute and a half
+  of grading: 160 MB of JSON on a case of 220,000 files, while every other
+  request waited for the interpreter. They are kept until the manifest
+  changes (`registry._manifest_facts`).
+- An unreadable manifest now says so in words, and points at rebuilding the
+  list.
+
+### Video in the gallery
+
+Reported on a workstation with two RTX 4080s and a 32-core Threadripper:
+video barely played in the scrub view, and grading a video took about twenty
+seconds to come back, with the screen flashing.
+
+- **Grading waited behind video decodes.** Each tile the pointer crossed asked
+  the server for its frames, each decode took seconds for a 4K phone clip, and
+  each held one of the six connections a browser opens to a server. With six
+  pending, the grading queued behind them. Reproduced with decodes made as slow
+  as a 4K clip's: the cursor moved at once and the grading was saved 9.4 s
+  later. Every frame request now goes through one queue, two at a time, the
+  clip under the pointer first: the same test saves in 0.13 s.
+- **Video tiles were blank** until hovered: the poster was a frame decoded on
+  the first hover. Posters and scrub frames are now made ahead by the tile
+  maker, like picture tiles: this page's first, then the next page's, on
+  workers of their own so a 4K clip does not hold up a page of pictures. A
+  poster not made yet answers at once and the clip goes to the front of the
+  queue; no request decodes video for a tile any more (`/api/poster`,
+  `/api/frames?cached=1`). The ahead-of-the-cursor prefetch had stopped
+  working entirely: it looked for `<video>` elements, and tiles had become
+  pictures.
+- **Every video gets a poster**, not only formats the browser plays: an AVI or
+  3GP showed ".avi".
+- **Scrubbing swaps the frames** and no longer opens the clip under the
+  pointer once its frames are there: a 4K clip seeked under the pointer was
+  what "barely plays" looked like, and each one held a connection and a
+  decoder.
+- **The details pane drew the wrong file.** Grading moves the cursor on at
+  once, and a slow answer for the file before could land after the one for
+  the file now selected. Only the newest request draws now, and a video
+  element being replaced is released, rather than left holding a connection.
+- **A clip the browser cannot play is played from a display copy** (H.264 in
+  an MP4, at most 1,280 wide, in `_playable/`), made the first time it is
+  opened. The player says so. Never hashed, counted or exported.
+- **The graphics cards.** With an FFmpeg built with NVIDIA support (Settings →
+  FFmpeg, or on PATH), posters, scrub frames and storyboards are decoded on the
+  cards, every card in turn, and display copies are encoded on them. Without
+  one, OpenCV decodes on the processor as before. What is installed says which
+  is used and why (`fme/engines/gpu_video.py`). **Not run on a card here**:
+  `tests/test_video_tiles.py` checks the commands through a stand-in FFmpeg;
+  `docs/EXAMINER_TASKS.md` Session H is the check on the workstation. FFmpeg is
+  not bundled: its NVIDIA builds are GPL, and that is the unit's choice.
+- Picture tiles are made on up to sixteen workers (half the cores), not six.
+- The gallery was compared with the other tool's. It redraws only the tiles a
+  grading changed, and so did this one already; its video tiles show a poster
+  made when the case was processed, which this one now does too.
+
+### The new readers
+
+- **chromiumcacheprobe 0.3.0** (new; MIT, Alexis Brignoni; recovery engine by
+  Forensik.IT GmbH). Video Chrome on Android cached as MP4 fragments is rebuilt
+  as MP4s (`fme/engines/chromecache.py`). The sample bytes are the cache's; a
+  clip whose header was rebuilt from its samples says so; every note says
+  cached video shows the browser fetched it, not that anyone watched it. On
+  the public DFRWS 2021 Galaxy S10 cache: 12 clips, 170 frames, the numbers
+  the probe's author recorded (`tests/test_chrome_cache.py`).
+- **mediacarve 0.14.1, ewfprobe 0.15.1, exoprobe 0.2.2, qnxprobe 1.80**,
+  re-vendored verbatim. qnxprobe 1.79 and 1.80 read QNX6 volumes with 8, 16
+  and 32 KiB blocks and ones whose superblock clock is unset (vehicle head
+  units). mediacarve was already the carve's only judge of length; its
+  0.14.1 changes nothing else, and the carve's own scan finds more formats
+  than mediacarve's, so it stays.
+- **A phone extraction as a zip or tar never had a cached video joined**: it
+  was read entry by entry, so ExoPlayer's pieces, DASH and HLS downloads and
+  Chrome's cache were joined only from a folder. Their folders are now copied
+  out as the package is read and joined after it (`sources._CacheSpill`, at
+  most 16 GiB, names that would climb out of the copy refused).
+- **Short clips a cache reader wrote whole were dropped** by the floor meant
+  for a carve's tiny false matches: two of Chrome's twelve, 2 KB and 7 KB.
+  Clips Chrome's and ExoPlayer's readers write are exempt
+  (`output.SIZED_SIGNATURES`).
+
+### Also
+
+- A `.gitignore`: 91 `__pycache__` files had been committed.
+- A grading built a table of every file in the case, holding the job lock;
+  `/api/frames` and `/api/preview` walked the whole list for one file. Both
+  now use an index kept with the list (`_job_index`).
+
 ## v2026.11.330 — The test job, on GitHub's new Ubuntu image
 
 - **The Linux test job stopped before running anything.** GitHub's

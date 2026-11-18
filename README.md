@@ -58,7 +58,9 @@ FME builds on other people's open-source work, and is grateful for it:
 - **Alexis Brignoni**'s standalone readers, also MIT:
   [ewfprobe](https://github.com/abrignoni/ewfprobe) (EnCase images without
   libewf), [exoprobe](https://github.com/abrignoni/exoprobe) (Android ExoPlayer
-  caches) and [c2pareader](https://github.com/abrignoni/c2pareader) (Content
+  caches), [chromiumcacheprobe](https://github.com/abrignoni/chromiumcacheprobe)
+  (video Chrome on Android cached as fragments; its recovery engine is by
+  Forensik.IT GmbH) and [c2pareader](https://github.com/abrignoni/c2pareader) (Content
   Credentials).
 - **[The Sleuth Kit](https://www.sleuthkit.org/)** by Brian Carrier and
   contributors, read through [pytsk3](https://github.com/py4n6/pytsk).

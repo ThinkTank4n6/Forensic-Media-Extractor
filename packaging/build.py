@@ -36,11 +36,12 @@ SHIPPED = [
 
 # Imported by name at run time, so a freezer cannot see them.
 BY_NAME = ["qnxprobe", "ewfprobe", "c2pareader", "exoprobe", "mediacarve",
-           "impacket_ese"]
+           "impacket_ese", "chromiumcacheprobe"]
 
 OPTIONAL = ["PIL", "cv2", "numpy", "flask", "waitress", "cheroot",
             "cryptography", "py7zr", "zstandard", "pytsk3", "pyewf",
-            "pillow_heif", "reportlab", "texture2ddecoder", "liblzfse"]
+            "pillow_heif", "reportlab", "texture2ddecoder", "liblzfse",
+            "onnxruntime"]
 
 
 def missing_files() -> list:

@@ -1,0 +1,15 @@
+# Python's caches, written beside the code whenever it runs
+__pycache__/
+*.pyc
+*.pyo
+
+# What a build leaves (build_exe.py, packaging/build.py)
+build/
+dist/
+build_info.json
+
+# Program state a run from the source tree can leave beside it
+/media_out/
+/cases.db
+/hash_store.db
+.fme_files_cache.json

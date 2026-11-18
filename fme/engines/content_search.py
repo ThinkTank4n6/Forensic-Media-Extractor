@@ -300,6 +300,49 @@ def describe(path: str, model_path: str):
     return encode(vector) if vector is not None else None
 
 
+def _read_prepared(path: str):
+    """A picture read and made into the model's input, or None."""
+    import cv2
+    import numpy as np
+
+    try:
+        with open(path, "rb") as fh:
+            blob = np.frombuffer(fh.read(), dtype=np.uint8)
+        picture = cv2.imdecode(blob, cv2.IMREAD_COLOR)
+    except Exception:  # noqa: BLE001
+        return None
+    if picture is None or picture.size == 0:
+        return None
+    return _prepare(picture)
+
+
+def describe_many(paths, model_path: str, progress=None) -> dict:
+    """{path: description, or None} for many pictures, on the graphics cards
+    where there are any (fme/engines/accel.py), several at once; one at a
+    time through OpenCV where there is no ONNX Runtime.
+
+    The same descriptions describe() makes, to within the model's own
+    rounding, so a case described partly one way and partly the other ranks
+    as one (accel.py says how closely they agree)."""
+    from fme.engines import accel
+
+    paths = list(dict.fromkeys(paths))
+    engines = accel.plan_for(model_path)
+    if not engines:
+        out = {}
+        for n, path in enumerate(paths, start=1):
+            out[path] = describe(path, model_path)
+            if progress and n % 50 == 0:
+                progress(n, len(paths))
+        return out
+
+    def finish(_path, output):
+        vector = _vector(output)
+        return encode(vector) if vector is not None else None
+
+    return accel.run_many(paths, _read_prepared, finish, engines, progress=progress)
+
+
 def similarity(left, right) -> float:
     """How alike two descriptions are, 0 to 1: their cosine, below 0 as 0.
 

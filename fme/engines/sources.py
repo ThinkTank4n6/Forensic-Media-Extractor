@@ -90,6 +90,14 @@ def run_package_engine(path: str, out: OutputManager, args, stats: dict,
         raise RuntimeError(
             f"{os.path.basename(path)} is damaged or incomplete: {exc}") from exc
 
+    # Caches whose files mean something only together -- ExoPlayer's pieces,
+    # a DASH or HLS download beside its manifest, Chrome's Simple Cache --
+    # were read here entry by entry, so a phone extraction delivered as a
+    # zip or tar never had a cached video rejoined: only a folder did. Their
+    # folders are copied out as they are read, and joined after the loop.
+    spill = _CacheSpill(out, [_entry_info(e)[1] for e in entries]) \
+        if getattr(args, "scan_inside", True) else None
+
     with archive:
         LOG.info("Package: %d entr(ies) in %s", len(entries),
                  os.path.basename(path))
@@ -107,7 +115,17 @@ def run_package_engine(path: str, out: OutputManager, args, stats: dict,
                 continue
             scanned += 1
             name = entry_name.rsplit("/", 1)[-1]
-            head = _entry_head(archive, entry, MAX_SIG_SPAN)
+            # Read once: a compressed tar re-reads from its start to go back.
+            spilled = spill.take(archive, entry, entry_name, size) \
+                if spill is not None else None
+            if spilled and appcache.EXO_PIECE.match(name):
+                # A piece of a cached video, joined with the rest after the
+                # loop; on its own it is a truncated clip (as in a folder).
+                continue
+            if spilled:
+                head = next(_file_chunks(spilled, chunk=MAX_SIG_SPAN), b"") or None
+            else:
+                head = _entry_head(archive, entry, MAX_SIG_SPAN)
             if head is None:
                 stats["errors"] += 1          # encrypted or damaged entry
                 continue
@@ -117,6 +135,7 @@ def run_package_engine(path: str, out: OutputManager, args, stats: dict,
             if category:
                 clean = re.sub(r"[^A-Za-z0-9._-]", "_", name)[:60].rsplit(".", 1)[0]
                 chunks, judged = _read_marked(
+                    _file_chunks(spilled, strict=True) if spilled else
                     _archive_chunks(archive, entry, strict=True), size,
                     "entry in a package (UFDR / zip / tar)")
                 rec = out.store(
@@ -136,7 +155,8 @@ def run_package_engine(path: str, out: OutputManager, args, stats: dict,
             if getattr(args, "databases", True) and db_extract is not None \
                     and db_extract.is_sqlite(head) \
                     and size <= getattr(args, "max_db_size", 4 * GIB):
-                blob = b"".join(_archive_chunks(archive, entry))
+                blob = b"".join(_file_chunks(spilled) if spilled
+                                else _archive_chunks(archive, entry))
                 if not blob:
                     stats["errors"] += 1
                     continue
@@ -149,8 +169,95 @@ def run_package_engine(path: str, out: OutputManager, args, stats: dict,
                     max_size=getattr(args, "max_db_size", 4 * GIB))
 
     stats["package_scanned"] = scanned
+    if spill is not None:
+        spill.join(stats, signatures)
     if progress_cb:
         progress_cb(len(entries), len(entries), stats["package_files"], "package")
+
+
+# A cache bigger than this is read entry by entry only; past it a copy is
+# not a reasonable thing to make on the examiner's drive unasked.
+CACHE_SPILL_MAX = 16 * 1024 * 1024 * 1024
+# Files that name what is in an ExoPlayer cache, which an app keeps in its
+# databases folder rather than beside the pieces.
+_EXO_INDEX_NAMES = ("cached_content_index.exi", "exoplayer_internal.db",
+                    "exoplayer_internal.db-wal", "exoplayer_internal.db-journal")
+
+
+class _CacheSpill:
+    """The cache folders of a package, copied out as the package is read."""
+
+    def __init__(self, out: OutputManager, names: list):
+        from fme.engines import chromecache  # noqa: PLC0415
+        self.out = out
+        self.root = None
+        self.used = 0
+        self.skipped = 0
+        self.folders = set()
+        self.extra = set()
+        for name in names:
+            folder, _, base = name.rpartition("/")
+            if (chromecache.ENTRY.match(base) or appcache.EXO_PIECE.match(base)
+                    or base.lower().endswith((".mpd", ".m3u8"))):
+                self.folders.add(folder)
+            elif base in _EXO_INDEX_NAMES:
+                self.extra.add(name)
+
+    def wanted(self, name: str) -> bool:
+        if name in self.extra:
+            return True
+        folder = name.rpartition("/")[0]
+        # Chrome keeps its index in index-dir/ under the cache folder.
+        return folder in self.folders or folder.rpartition("/")[0] in self.folders
+
+    def take(self, archive, entry, name: str, size: int):
+        """The entry copied into the spill folder, or None."""
+        if not self.folders or not self.wanted(name):
+            return None
+        if self.used + size > CACHE_SPILL_MAX:
+            self.skipped += 1
+            return None
+        # A member's name is the package's to choose. "..", and on Windows a
+        # component naming a drive ("C:") -- which os.path.join takes as a new
+        # root -- would put the copy outside the spill folder; neither may.
+        parts = [re.sub(r'[<>:"|?*\x00-\x1f]', "_", p)
+                 for p in name.replace("\\", "/").split("/")
+                 if p not in ("", ".", "..")]
+        if not parts:
+            return None
+        if self.root is None:
+            self.root = tempfile.mkdtemp(prefix=".fme_cache_spill_",
+                                         dir=self.out.outdir)
+        dest = os.path.join(self.root, *parts)
+        try:
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            with open(dest, "wb") as fh:
+                for piece in _archive_chunks(archive, entry, strict=True):
+                    fh.write(piece)
+        except Exception:  # noqa: BLE001 - this entry is read the usual way
+            try:
+                os.remove(dest)
+            except OSError:
+                pass
+            return None
+        self.used += size
+        return dest
+
+    def join(self, stats: dict, signatures) -> None:
+        if self.skipped:
+            stats["cache_spill_skipped"] = stats.get("cache_spill_skipped", 0) + self.skipped
+            LOG.warning("%d cache file(s) were read one by one only: the package's "
+                        "caches are larger than %d GiB", self.skipped,
+                        CACHE_SPILL_MAX // (1024 ** 3))
+        if self.root is None:
+            return
+        try:
+            _rejoin_exoplayer(self.root, self.out, stats, signatures)
+            _join_loose_streams(self.root, self.out, stats, signatures)
+            _rebuild_chrome_cache(self.root, self.out, stats, signatures)
+        finally:
+            shutil.rmtree(self.root, ignore_errors=True)
+            self.root = None
 
 
 def _open_archive(path: str):
@@ -526,6 +633,7 @@ def run_folder_engine(root: str, out: OutputManager, args, stats: dict,
     if getattr(args, "scan_inside", True):
         _rejoin_exoplayer(root, out, stats, signatures)
         _join_loose_streams(root, out, stats, signatures)
+        _rebuild_chrome_cache(root, out, stats, signatures)
 
     stats["folder_scanned"] = scanned
     if progress_cb:
@@ -599,6 +707,61 @@ def _join_loose_streams(root: str, out: OutputManager, stats: dict,
         shutil.rmtree(scratch, ignore_errors=True)
     if kept:
         LOG.info("Segmented streams  : %d joined from their manifests", kept)
+    return kept
+
+
+def _rebuild_chrome_cache(root: str, out: OutputManager, stats: dict,
+                          signatures) -> int:
+    """Video Chrome on Android cached as MP4 fragments, rebuilt as MP4s.
+
+    fme/engines/chromecache.py says how; the vendored chromiumcacheprobe
+    does it. The cache entries themselves are still read one by one by the
+    walk above, so a cache this cannot rebuild loses nothing.
+    """
+    try:
+        from fme.engines import chromecache
+    except Exception:  # noqa: BLE001
+        return 0
+    if not chromecache.available():
+        return 0
+    scratch = tempfile.mkdtemp(prefix="fme_chrome_")
+    kept = 0
+    try:
+        for clip in chromecache.rebuild(root, scratch, stats):
+            try:
+                with open(clip["path"], "rb") as fh:
+                    head = fh.read(MAX_SIG_SPAN)
+            except OSError:
+                continue
+            category, ext = sniff_category(head, "clip.mp4", signatures)
+            if category is None:
+                continue
+            note = chromecache.note_for(clip)
+            first = (clip.get("sources") or [""])[0]
+            name = re.sub(r"[^A-Za-z0-9._-]", "_",
+                          (clip.get("url") or "").rsplit("/", 1)[-1].split("?")[0])[:40]
+            chunks, judged = _file_marked(clip["path"], note)
+            rec = out.store(
+                chunks, after_read=judged, category=category, ext=ext or "mp4",
+                stem=f"recovered_{out.next_index():04d}_chrome_{name or 'clip'}",
+                engine="embedded", source_path=first,
+                inode="", fs_type="", partition="", deleted=False,
+                signature=("embedded:chrome-cache-mp4"
+                           if clip.get("kind") == "complete_mp4_carved"
+                           else "embedded:chrome-cache-fragments"),
+                note=note)
+            if rec:
+                kept += 1
+                stats["chrome_cache_items"] = stats.get("chrome_cache_items", 0) + 1
+                if clip.get("reconstructed"):
+                    stats["chrome_cache_rebuilt_header"] = (
+                        stats.get("chrome_cache_rebuilt_header", 0) + 1)
+                stats["embedded_files"] += 1
+                stats["embedded_bytes"] += rec.size
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+    if kept:
+        LOG.info("Chrome cache video : %d rebuilt from cached fragments", kept)
     return kept
 
 

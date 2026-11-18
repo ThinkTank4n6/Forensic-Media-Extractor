@@ -123,7 +123,8 @@ KEY_COOKIE = "fme_key"
 
 # Routes that hand back bytes recovered from evidence.
 EVIDENCE_PATHS = frozenset({"/api/file", "/api/thumb", "/api/preview",
-                            "/api/frame", "/api/download", "/api/media/download"})
+                            "/api/frame", "/api/download", "/api/media/download",
+                            "/api/poster", "/api/playable/file"})
 
 
 def _has_key(key: str) -> bool:

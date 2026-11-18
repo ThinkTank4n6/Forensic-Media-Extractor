@@ -443,7 +443,24 @@ what closed them, so they are not reopened by mistake.
    PMTiles fixture only; the vector style is checked as JSON, not drawn,
    because no vector basemap is among the fixtures.
 
+7. **Nothing has run on a graphics card.** v2026.11.331 decodes video on the
+   NVIDIA cards through FFmpeg and v2026.11.332 runs the content model on
+   them through ONNX Runtime; both are checked here through stand-ins that
+   say they have cards (`tests/test_video_tiles.py`, `tests/test_accel.py`,
+   `tests/test_background_decode_priority.py`). `bench` on the workstation
+   (docs/EXAMINER_TASKS.md, Session H) is the check that they do the work.
+8. **Faces stay on OpenCV**, on several threads. The face detector's
+   decoding of its own output lives inside OpenCV; moving it to ONNX Runtime
+   means writing that decoding here, and should wait for real faces to check
+   it against (5, above).
+
 ### Closed
+
+- **The open issues of v2026.11.331** -- *closed in v2026.11.332* (CHANGELOG
+  lists them ranked): background decodes at full priority and unbounded; a
+  display copy made inside the request; a whole-case recount after every
+  grading; decode slots counted once; an open and a lock never let go; a
+  browser test that read a row in three steps.
 
 - **The gallery holds a page, not the case** -- *closed in v2026.11.309.*
   Past `PAGED_THRESHOLD` files (20,000; `FME_PAGED_THRESHOLD` sets it) the

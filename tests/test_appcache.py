@@ -127,6 +127,32 @@ print(f"  summary: {manifest['summary']['exo_items']} item(s), "
       f"{manifest['summary']['exo_pieces']} piece(s) joined, "
       f"{manifest['summary']['exo_partial']} partial")
 
+print("\ninside a phone extraction's zip")
+# Read entry by entry, a zip never had its cached video rejoined: only a
+# folder did. Since v2026.11.331 the cache folders are copied out and joined.
+import zipfile
+package = os.path.join(ROOT, "phone.zip")
+with zipfile.ZipFile(package, "w") as z:
+    for here, _dirs, names in os.walk(CACHE):
+        for n in names:
+            full = os.path.join(here, n)
+            z.write(full, "data/data/com.example.app/cache/exoplayer/"
+                    + os.path.relpath(full, CACHE).replace(os.sep, "/"))
+zip_out = os.path.join(ROOT, "zip_out")
+subprocess.run([sys.executable, "-m", "fme", "extract", "-i", package, "-o", zip_out],
+               capture_output=True,
+               cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+with open(os.path.join(zip_out, "manifest.json"), encoding="utf-8") as fh:
+    zipped = json.load(fh)
+zip_digests = {f["sha256"] for f in zipped["files"]}
+rejoined_in_zip = hashlib.sha256(whole).hexdigest() in zip_digests
+ok &= rejoined_in_zip
+print(f"  rejoined video recovered from the zip: {rejoined_in_zip}")
+stray = [f for f in zipped["files"] if f["source_path"].endswith(".exo")
+         and f.get("signature") != "embedded:exoplayer-cache"]
+ok &= not stray
+print(f"  pieces not registered as videos: {not stray}")
+
 print("\nSnapchat bundles")
 available = appcache.zstd_available()
 print(f"  Zstandard decompressor: {available or 'none installed'}")

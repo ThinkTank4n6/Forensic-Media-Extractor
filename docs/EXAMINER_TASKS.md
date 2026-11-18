@@ -284,6 +284,47 @@ any other reason, or a blank tile, is a fault to report with the file.
 
 ---
 
+## Session H — the graphics cards, fifteen minutes
+
+Nothing in this program's own tests has run on an NVIDIA card: there is none
+where it is built. `tests/test_video_tiles.py` and `tests/test_accel.py`
+check what is done with a card through stand-ins that pretend to be one.
+Only a machine with a card can say the card does the work.
+
+On the workstation with the RTX 4080s, with an FFmpeg that has NVIDIA
+support set in **File → Settings**:
+
+0. **Measure first.** In a command prompt in the program's folder:
+
+       ForensicMediaExtractor doctor
+       ForensicMediaExtractor bench --case D:\cases\<a large case>
+
+   `doctor`'s "models on" line should list `DmlExecutionProvider`; `bench`
+   should time the pictures on "DirectML card 0, DirectML card 1" and the
+   video on "FFmpeg on 2 NVIDIA card(s)". Send back both outputs and the JSON
+   file bench names.
+1. **File → What is installed.** Note the FFmpeg line: it should name the
+   FFmpeg and say how many cards decode. If it says none opened, note its
+   reason.
+2. Open a case with a few hundred phone videos (HEVC from an iPhone is the
+   useful test). Open Task Manager → Performance → each GPU, and set one of
+   its graphs to "Video Decode".
+3. Watch the video tiles fill with posters. Note how long the first page
+   takes, and whether Video Decode moves on **both** cards.
+4. Hover across a row of video tiles: does each scrub at once?
+5. Grade ten videos in a row with the number keys, quickly. Note any pause,
+   and anything on screen that flashes.
+6. Open an HEVC or AVI clip in the viewer. It should say it is playing a
+   display copy; note how long that took for its length, and whether Video
+   Encode moved.
+7. Set FFmpeg in Settings to a path that does not exist, restart, and repeat
+   step 3: posters should still come, from OpenCV, slower.
+8. On a case not searched before: open a picture, **Find like this**. Note
+   how long the first search takes for how many pictures, and whether both
+   cards' "3D" or "Compute" graph moves in Task Manager while it does.
+
+Send back the What is installed text and the times.
+
 ## Session F — not a computer task
 
 Give `docs/VALIDATION.md` §5 to somebody in the unit who did **not**
@@ -308,6 +349,7 @@ table: a record that keeps only successes is not a record.
 | D — APFS and HFS+ | | | | |
 | E — the interface | | | | |
 | G — Windows Search and iOS snapshots | | | | |
+| H — the graphics cards | | | | |
 | F — someone else reads §5 | | | | |
 
 ---

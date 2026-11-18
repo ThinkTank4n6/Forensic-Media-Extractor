@@ -120,96 +120,35 @@ def api_cases_open():
             f"No manifest in {out_dir}. The folder may have been moved or "
             f"deleted; the list only records where output was, not a copy "
             f"of it."))
+    job_id = uuid.uuid4().hex
+    if data.get("background"):
+        # The page's way: answered at once, and followed on
+        # /api/cases/opening, which says how far the open has got.
+        _open_case_in_background(out_dir, job_id)
+        return jsonify({"ok": True, "job_id": job_id, "out_dir": out_dir,
+                        "opening": True})
     try:
-        with open(manifest_path, "r", encoding="utf-8") as fh:
-            manifest = json.load(fh)
-    except (OSError, json.JSONDecodeError) as exc:
+        return jsonify(_open_case(out_dir, job_id))
+    except (OSError, ValueError) as exc:
         return error_response(exc)
 
-    book = _registry()
-    known = book.get(out_dir)
-    summary = dict(manifest.get("summary", {}))
-    # What is on disk now, not what the run wrote then: a ProjectVIC.json
-    # written by an export after the run was reported as missing on every
-    # reopen, and one since deleted as present (v2026.11.320, U11).
-    summary["reopened"] = True
-    summary.pop("project_vic", None)
-    for where in (out_dir, os.path.join(out_dir, "export"), os.path.join(out_dir, "report")):
-        try:
-            found = sorted(n for n in os.listdir(where)
-                           if n.lower().startswith("projectvic") and n.lower().endswith(".json"))
-        except OSError:
-            continue
-        if found:
-            summary["project_vic"] = os.path.join(where, found[0])
-            break
-    job_id = uuid.uuid4().hex
-    with JOBS_LOCK:
-        JOBS[job_id] = {
-            "status": "done", "done": 1, "total": 1,
-            "recovered": len(manifest.get("files", [])), "phase": "finished",
-            "files": [_job_file_entry(f) for f in manifest.get("files", [])],
-            "summary": summary, "error": None,
-            "path": summary.get("image", ""), "out_dir": out_dir,
-            "examiner": known.get("examiner", ""),
-            "case_number": known.get("case_number", ""),
-            "_cancel": threading.Event(), "reopened": True,
-        }
-        LAST_JOB["id"] = job_id
-    # Bring back what earlier sessions worked out, so a reopened case is
-    # where it was left rather than where it started.
-    case = _case_for(job_id)
-    restored = {}
-    if case is not None:
-        matches = case.derived("hash_matches")
-        similarity_rows = case.derived("similarity")
-        screened = case.derived("screening")
-        if screened:
-            for entry in JOBS[job_id]["files"]:
-                found = screened.get(entry.get("sha256"))
-                if found:
-                    entry["skin"] = found.get("skin")
-                    entry["skin_band"] = found.get("band") or ""
-                    entry["faces"] = found.get("faces", -1)
-        restored = {"hash_matches": len(matches),
-                    "similarity": len(similarity_rows)}
-        with JOBS_LOCK:
-            if matches:
-                JOBS[job_id]["hash_matches"] = matches
-                for entry in JOBS[job_id]["files"]:
-                    if entry.get("sha256") in matches:
-                        entry["hash_sets"] = matches[entry["sha256"]]
-            if similarity_rows:
-                by_path = {row["out_path"]: row for row in similarity_rows.values()
-                           if row.get("out_path")}
-                JOBS[job_id]["similarity"] = {
-                    "hashes": {p: r["dhash"] for p, r in by_path.items() if r.get("dhash")},
-                    "phashes": {p: r["phash"] for p, r in by_path.items() if r.get("phash")},
-                    "membership": {p: r["group"] for p, r in by_path.items()
-                                   if r.get("group")},
-                    "stack_membership": {p: r["stack"] for p, r in by_path.items()
-                                         if r.get("stack")},
-                    "max_distance": 8, "restored": True,
-                }
-                sizes = {}
-                for row in similarity_rows.values():
-                    group = row.get("group")
-                    if group:
-                        sizes[group] = sizes.get(group, 0) + 1
-                for entry in JOBS[job_id]["files"]:
-                    row = similarity_rows.get(entry.get("sha256"))
-                    if row:
-                        entry["similar_group"] = row.get("group")
-                        entry["similar_count"] = sizes.get(row.get("group"), 1)
 
-    # The tiles, made ahead from now on: a case opened from the list had
-    # every one made while the examiner waited for its page (v2026.11.326).
-    _start_prefill(job_id)
-    book.touch(out_dir)
-    book.refresh(out_dir)
-    return jsonify({"ok": True, "job_id": job_id, "out_dir": out_dir,
-                    "files": len(manifest.get("files", [])),
-                    "restored": restored, "case": book.get(out_dir)})
+@app.route("/api/cases/opening")
+def api_cases_opening():
+    """How far a background open has got: a stage, and done of total in
+    bytes or files where the stage has a count. Once ready, the open's own
+    answer (or its error), given once."""
+    job_id = request.args.get("job", "")
+    with OPENING_LOCK:
+        state = dict(OPENING.get(job_id) or {})
+        if state.get("ready"):
+            OPENING.pop(job_id, None)
+    if not state:
+        return error_response(KeyError("No case is being opened under that id"),
+                              status=404)
+    state.pop("started", None)
+    state.pop("finished", None)
+    return jsonify(dict(state, ok=True))
 
 
 @app.route("/api/case/rebuild", methods=["POST"])

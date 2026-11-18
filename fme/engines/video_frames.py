@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import threading
 import os
 import sys
 
@@ -70,12 +71,88 @@ def available() -> bool:
         return False
 
 
+def decodable() -> bool:
+    """Whether frames can be made at all: by FFmpeg (fme/engines/gpu_video.py)
+    or by OpenCV."""
+    from fme.engines import gpu_video
+    return bool(gpu_video.info().get("cuda")) or available()
+
+
 def status() -> dict:
+    from fme.engines import gpu_video
+    found = gpu_video.info()
     try:
         import cv2
-        return {"available": True, "version": cv2.__version__, "message": ""}
+        state = {"available": True, "version": cv2.__version__, "message": ""}
     except ImportError:
-        return {"available": False, "version": "", "message": UNAVAILABLE}
+        state = {"available": bool(found.get("ffmpeg")), "version": "",
+                 "message": "" if found.get("ffmpeg") else UNAVAILABLE}
+    state["decoder"] = ("FFmpeg on the NVIDIA card(s)" if found.get("cuda")
+                        else "OpenCV on the processor")
+    state["ffmpeg"] = found
+    return state
+
+
+# Decodes at once. Each is a process and, on a card, a decoder session; past
+# a few the page's own requests wait for the machine. Made ahead of the page
+# (background=True) takes one fewer, so a frame the examiner is waiting for
+# always has a slot.
+_SLOTS = None
+_BG_SLOTS = None
+_SLOTS_SIZE = 0
+_SLOTS_LOCK = threading.Lock()
+
+
+def _slots(background: bool):
+    """Sized to what the machine can decode now. Sized once, at the first
+    decode, an FFmpeg set in Settings afterwards -- or found only after the
+    background probe finished -- left two cards at the processor's count
+    until the program was restarted (v2026.11.332). A decode already holding
+    the old semaphore releases that one; the next takes the new."""
+    global _SLOTS, _BG_SLOTS, _SLOTS_SIZE
+    from fme.engines import gpu_video
+    n = gpu_video.slots()
+    with _SLOTS_LOCK:
+        if _SLOTS is None or n != _SLOTS_SIZE:
+            _SLOTS = threading.BoundedSemaphore(n)
+            _BG_SLOTS = threading.BoundedSemaphore(max(1, n - 1))
+            _SLOTS_SIZE = n
+        return _BG_SLOTS if background else _SLOTS
+
+
+def _extract_ffmpeg(path: str, out_dir: str, sha256: str, count: int,
+                    width: int, board: bool, background: bool = False) -> dict:
+    """extract() by FFmpeg: the card where there is one, the processor where
+    not. The same folder, names and finish as the OpenCV path, so either
+    path's frames are the cache for the other."""
+    import shutil
+    import uuid
+
+    from fme.engines import gpu_video
+
+    final = frames_dir(out_dir, sha256, board)
+    folder = f"{final}.part{uuid.uuid4().hex[:12]}"
+    os.makedirs(folder, exist_ok=True)
+    try:
+        written, length, how = gpu_video.frames(path, folder, count, width, JPEG_QUALITY,
+                                                background=background)
+        if not written:
+            return {"ok": False, "frames": [], "error": how}
+        if board:
+            with open(os.path.join(folder, "board.json"), "w", encoding="utf-8") as fh:
+                json.dump({"duration": round(length, 3), "count": count,
+                           "indexes": [int(os.path.basename(w)[:2]) for w in written]}, fh)
+            if os.path.isdir(final) and not existing(out_dir, sha256, True):
+                shutil.rmtree(final, ignore_errors=True)
+        try:
+            os.rename(folder, final)
+        except OSError:
+            pass        # another decode of the same file finished first
+        return {"ok": True, "frames": existing(out_dir, sha256, board),
+                "duration": round(length, 2), "count": count, "cached": False,
+                "decoded_by": how, "error": ""}
+    finally:
+        shutil.rmtree(folder, ignore_errors=True)
 
 
 def needs_extraction(ext: str) -> bool:
@@ -153,7 +230,8 @@ DECODE_TIMEOUT = 120
 
 
 def extract(path: str, out_dir: str, sha256: str, count: int = FRAME_COUNT,
-            width: int = FRAME_WIDTH, board: bool = False) -> dict:
+            width: int = FRAME_WIDTH, board: bool = False,
+            background: bool = False) -> dict:
     """Frames from one video, decoded in a process of its own.
 
     The decoder is FFmpeg underneath OpenCV, in C. A malformed stream can
@@ -180,8 +258,30 @@ def extract(path: str, out_dir: str, sha256: str, count: int = FRAME_COUNT,
         return {"ok": True, "frames": cached, "cached": True,
                 **({k: v for k, v in board_info(out_dir, sha256).items()
                     if k in ("duration", "count")} if board else {})}
-    if not available():
-        return {"ok": False, "error": UNAVAILABLE, "frames": []}
+    with _slots(background):
+        cached = existing(out_dir, sha256, board)
+        if cached:          # made while this waited for a slot
+            return {"ok": True, "frames": cached, "cached": True}
+        from fme.engines import gpu_video
+        ffmpeg_said = ""
+        # FFmpeg only where it decodes on a card; without one, OpenCV, as
+        # before v2026.11.331 -- it was the quicker of the two there.
+        if gpu_video.info().get("cuda"):
+            # A separate program, so a clip that crashes it cannot take the
+            # server with it, which is what the OpenCV child below is for.
+            made = _extract_ffmpeg(path, out_dir, sha256, count, width, board,
+                                   background=background)
+            if made.get("ok"):
+                return made
+            ffmpeg_said = made.get("error", "")
+        if not available():
+            return {"ok": False, "frames": [],
+                    "error": ffmpeg_said or UNAVAILABLE}
+        return _extract_opencv(path, out_dir, sha256, count, width, board)
+
+
+def _extract_opencv(path: str, out_dir: str, sha256: str, count: int,
+                    width: int, board: bool) -> dict:
     from fme.engines import isolated
     import uuid
 

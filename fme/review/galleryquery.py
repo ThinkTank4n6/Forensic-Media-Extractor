@@ -26,6 +26,7 @@ from __future__ import annotations
 import collections
 import math
 import threading
+import time
 import datetime
 import functools
 import re
@@ -288,6 +289,11 @@ def passes_all(f, st, decisions, except_key=None) -> bool:
 
 def visible(files: list, decisions: dict, st: State) -> list:
     shown = [f for f in files if passes_all(f, st, decisions)]
+    return _stacked(shown, st)
+
+
+def _stacked(shown: list, st: State) -> list:
+    """One file per look-alike group, when the page stacks them."""
     if not st.stack:
         return shown
     seen, out = set(), []
@@ -352,7 +358,17 @@ _BUILDING: dict = {}
 _TABLES_LOCK = threading.Lock()
 
 
-def facet_table(files: list, zone: str = "") -> list:
+# Built in the background by warm(), in pieces with a pause between: it is
+# pure Python, and run straight through it took the interpreter from every
+# request for seconds -- a grading on a case of 220,000 files took about a
+# second while it ran, and 4 ms after (v2026.11.332). A request that needs the
+# table and finds it being built says so (_HURRY), and the pauses stop.
+WARM_PIECE = 2000
+WARM_PAUSE = 0.004
+_HURRY: set = set()
+
+
+def facet_table(files: list, zone: str = "", gentle: bool = False) -> list:
     key = (id(files), len(files), zone)
     while True:
         with _TABLES_LOCK:
@@ -369,11 +385,17 @@ def facet_table(files: list, zone: str = "") -> list:
             else:
                 mine = False
         if not mine:
+            with _TABLES_LOCK:
+                _HURRY.add(key)
             building.wait()
             continue
         try:
-            table = [tuple(facet_values(name, f, zone) for name, _ in FACETS)
-                     for f in files]
+            table = []
+            for start in range(0, len(files), WARM_PIECE):
+                table.extend(tuple(facet_values(name, f, zone) for name, _ in FACETS)
+                             for f in files[start:start + WARM_PIECE])
+                if gentle and key not in _HURRY:
+                    time.sleep(WARM_PAUSE)
             with _TABLES_LOCK:
                 _TABLES[key] = (files, table)
                 while len(_TABLES) > 2:
@@ -382,6 +404,7 @@ def facet_table(files: list, zone: str = "") -> list:
         finally:
             with _TABLES_LOCK:
                 _BUILDING.pop(key, None)
+                _HURRY.discard(key)
             building.set()
 
 
@@ -393,7 +416,7 @@ def warm(files: list, zone: str = "") -> None:
         held = _TABLES.get(key)
         if (held is not None and held[0] is files) or key in _BUILDING:
             return
-    threading.Thread(target=facet_table, args=(files, zone), daemon=True,
+    threading.Thread(target=facet_table, args=(files, zone, True), daemon=True,
                      name="facet-values").start()
 
 
@@ -430,7 +453,7 @@ def aggregates(files: list, decisions: dict, st: State) -> dict:
     known = boxes = 0
     groups = set()
     for f in files:
-        code = category_of(f, decisions, st)
+        code, classified, tags = counted(f, decisions, st)
         by_category[code] = by_category.get(code, 0) + 1
         if is_known_software(f):
             known += 1
@@ -438,16 +461,91 @@ def aggregates(files: list, decisions: dict, st: State) -> dict:
             boxes += 1
         if truthy(f.get("similar_group")):
             groups.add(f.get("similar_group"))
-        if not passes_base(f, st, decisions):
+        if classified is None:
             continue
         classify_cat[code] = classify_cat.get(code, 0) + 1
-        if st.cat != "" and str(code) != st.cat:
-            continue
-        for flag in (decisions.get(f.get("sha256")) or {}).get("flags") or []:
+        for flag in tags:
             flags[flag] = flags.get(flag, 0) + 1
     return {"case_total": len(files), "by_category": by_category,
             "classify": {"by_category": classify_cat, "flags": flags},
             "known_software": known, "containers": boxes, "groups": len(groups)}
+
+
+def counted(f: dict, decisions: dict, st: State) -> tuple:
+    """What one file adds to aggregates(): (its category, its category again
+    if it passes the chips and the search -- None if not -- and the flags it
+    adds to the Classify pane). One judge for the full count and for the
+    count adjusted after a grading, so the two cannot disagree."""
+    code = category_of(f, decisions, st)
+    if not passes_base(f, st, decisions):
+        return code, None, ()
+    if st.cat != "" and str(code) != st.cat:
+        return code, code, ()
+    return code, code, tuple((decisions.get(f.get("sha256")) or {}).get("flags") or [])
+
+
+def _adjusted(previous: dict, files: list, old: dict, new: dict, st: State,
+              changed) -> dict:
+    """previous, the aggregates under old, made the aggregates under new by
+    taking out and putting back only the files whose decision changed."""
+    import copy
+    out = copy.deepcopy(previous)
+    by_category = out["by_category"]
+    classify_cat = out["classify"]["by_category"]
+    flags = out["classify"]["flags"]
+    index = digest_index(files)
+
+    def move(table, key, step):
+        table[key] = table.get(key, 0) + step
+        if table[key] == 0:
+            del table[key]
+
+    for digest in changed:
+        for f in index.get(digest, ()):
+            for decided, step in ((old, -1), (new, 1)):
+                code, classified, tags = counted(f, decided, st)
+                move(by_category, code, step)
+                if classified is not None:
+                    move(classify_cat, code, step)
+                for flag in tags:
+                    move(flags, flag, step)
+    return out
+
+
+_DIGESTS = (None, 0, {})
+_POSITIONS = (None, 0, {})
+
+
+def digest_positions(files: list) -> dict:
+    """SHA-256 -> where in the list the files carrying it are."""
+    global _POSITIONS
+    held, length, index = _POSITIONS
+    if held is files and length == len(files):
+        return index
+    index = {}
+    for n, f in enumerate(files):
+        index.setdefault(f.get("sha256"), []).append(n)
+    _POSITIONS = (files, len(files), index)
+    return index
+
+
+def digest_index(files: list) -> dict:
+    """SHA-256 -> the files carrying it, for this list (kept until the list
+    is replaced, as case_order is)."""
+    global _DIGESTS
+    held, length, index = _DIGESTS
+    if held is files and length == len(files):
+        return index
+    index = {}
+    for f in files:
+        index.setdefault(f.get("sha256"), []).append(f)
+    _DIGESTS = (files, len(files), index)
+    return index
+
+
+# Past this many changed decisions the count is made again from nothing: a
+# bulk grading of a whole case is rarer than a keystroke and cheaper whole.
+ADJUST_LIMIT = 5000
 
 
 def group_members(files: list, groups) -> list:
@@ -522,13 +620,80 @@ class Cache:
 
     def visible(self, files: list, decisions: dict, version, raw: dict,
                 st: State) -> list:
-        return self._get("visible", files, version, raw,
-                         lambda: visible(files, decisions, st))
+        """The filtered list, with only the files whose decision changed
+        tested again: after a grading every file was put through the filter,
+        0.9 s on a case of 220,000, before the next page could be sent
+        (v2026.11.332). Which files pass is kept as one flag per file; the
+        list is made again from the flags only when one of them changed."""
+        import itertools
+        import json
+        base = ("visible-base", id(files), len(files),
+                json.dumps(raw, sort_keys=True, default=str))
+
+        def compute():
+            with self._lock:
+                held = self._items.get(base)
+            value = None
+            if held is not None and held[0] is files:
+                old, flags, shown = held[1], held[2], held[3]
+                if old is decisions:
+                    value = shown
+                else:
+                    changed = [d for d in set(old) | set(decisions)
+                               if old.get(d) != decisions.get(d)]
+                    if len(changed) <= ADJUST_LIMIT:
+                        flags = list(flags)
+                        moved = False
+                        where = digest_positions(files)
+                        for digest in changed:
+                            for n in where.get(digest, ()):
+                                now = passes_all(files[n], st, decisions)
+                                if now != flags[n]:
+                                    flags[n] = now
+                                    moved = True
+                        value = (_stacked(list(itertools.compress(files, flags)), st)
+                                 if moved else shown)
+            if value is None:
+                flags = [passes_all(f, st, decisions) for f in files]
+                value = _stacked(list(itertools.compress(files, flags)), st)
+            with self._lock:
+                self._items[base] = (files, decisions, flags, value)
+                self._items.move_to_end(base)
+            return value
+
+        return self._get("visible", files, version, raw, compute)
 
     def aggregates(self, files: list, decisions: dict, version, raw: dict,
                    st: State) -> dict:
-        return self._get("counts", files, version, raw,
-                         lambda: aggregates(files, decisions, st))
+        """The counts, adjusted for what changed since the last count of this
+        list and state rather than made again: on a case of 220,000 files a
+        count was 0.7 to 0.9 s, and the page asks for one after every
+        grading (v2026.11.332)."""
+        import json
+        base = ("counts-base", id(files), len(files),
+                json.dumps(raw, sort_keys=True, default=str))
+
+        def compute():
+            with self._lock:
+                held = self._items.get(base)
+            if held is not None and held[0] is files and held[1] is not decisions:
+                old = held[1]
+                changed = [d for d in set(old) | set(decisions)
+                           if old.get(d) != decisions.get(d)]
+                if len(changed) <= ADJUST_LIMIT:
+                    value = _adjusted(held[2], files, old, decisions, st, changed)
+                else:
+                    value = aggregates(files, decisions, st)
+            elif held is not None and held[0] is files:
+                value = held[2]
+            else:
+                value = aggregates(files, decisions, st)
+            with self._lock:
+                self._items[base] = (files, decisions, value)
+                self._items.move_to_end(base)
+            return value
+
+        return self._get("counts", files, version, raw, compute)
 
     def facets(self, files: list, decisions: dict, version, raw: dict,
                st: State) -> dict:

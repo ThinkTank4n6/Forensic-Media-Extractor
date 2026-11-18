@@ -236,7 +236,8 @@ def api_settings():
                            for key in ("examiner", "agency", "output_root",
                                        "timezone", "case_number",
                                        "content_model", "face_detector",
-                                       "face_recognizer", "c2pa_trust_list")},
+                                       "face_recognizer", "c2pa_trust_list",
+                                       "ffmpeg_path")},
                         "category_region": regions.normalize(
                             kept.get("category_region")),
                         "token_saved": bool(kept.get("store_token"))})
@@ -251,11 +252,14 @@ def api_settings():
         values = {key: (data.get(key) or "").strip()
                   for key in ("examiner", "agency", "output_root", "timezone",
                               "content_model", "face_detector",
-                              "face_recognizer", "c2pa_trust_list")
+                              "face_recognizer", "c2pa_trust_list", "ffmpeg_path")
                   if key in data}
         if "category_region" in data:
             values["category_region"] = regions.normalize(data["category_region"])
         settings.save(values)
+        if "ffmpeg_path" in values:
+            from fme.engines import gpu_video
+            gpu_video.configure(values["ffmpeg_path"])
     except OSError as exc:
         return error_response(exc)
     return jsonify({"ok": True})

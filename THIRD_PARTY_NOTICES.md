@@ -126,6 +126,7 @@ authoritative text. In summary:
 | ReportLab | BSD |
 | texture2ddecoder | MIT |
 | pyliblzfse | MIT (LZFSE itself BSD-3-Clause) |
+| ONNX Runtime (onnxruntime, onnxruntime-directml) | MIT, Copyright (c) Microsoft Corporation; the Windows build's DirectML.dll is Microsoft's redistributable, under the license in the package's own files |
 
 ## Code included in this program's source
 
@@ -135,6 +136,7 @@ beside it in `fme/vendor/` (provenance in `fme/vendor/vendored.json`):
 | component | copyright | license |
 |---|---|---|
 | mediacarve, qnxprobe, ewfprobe, exoprobe, c2pareader | Copyright (c) 2026 Alexis Brignoni | MIT |
+| chromiumcacheprobe (`fme/vendor/LICENSE-chromiumcacheprobe`) | Copyright (c) 2026 Alexis Brignoni; Copyright (c) 2026 Forensik.IT GmbH, who wrote its recovery engine | MIT |
 | GLEAPP, from which qnxprobe, mediacarve, the ESE reader, the models and the map assets were taken (`fme/vendor/LICENSE-gleapp`) | Copyright (c) 2026 charpy4n6, Alexis Brignoni | MIT |
 | qnxmount (byte layouts transcribed by qnxprobe) | | Apache-2.0 |
 | impacket ESE reader | Copyright (c) 2003-2023 Fortra (impacket); adaptation by DLEAPP | Apache-1.1 (Impacket variant), with an MIT part, Copyright (c) 2019 Isaac Boukris |

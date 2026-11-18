@@ -1602,11 +1602,9 @@ async function wireFilmstrip(container, relPath, ext) {
     if (decided) return;
     decided = true;
     try {
-      const d = await api(`/api/frames?job=${jobId}&file=${encodeURIComponent(relPath)}`);
-      if (!d.available) {
-        strip.innerHTML = `<span class="hint">${esc(d.message)}</span>`;
-        return;
-      }
+      const got = await framesFor(relPath, {urgent: true});
+      if (!strip.isConnected) return;
+      const d = {available: true, frames: got || [], error: got ? "" : "the server did not answer"};
       if (!d.frames.length) {
         strip.innerHTML = `<span class="hint">No frame could be decoded` +
           `${d.error ? ` — ${esc(d.error)}` : ""}. Open with… hands it to a player.</span>`;
@@ -1635,62 +1633,171 @@ async function wireFilmstrip(container, relPath, ext) {
 //
 // So: only tiles actually on screen, two at a time, in the order they
 // appear, stopping the moment the page changes.
-const framesReady = new Map();      // rel_path -> frames, or [] if none
-const framesWanted = [];
+const framesReady = new Map();      // rel_path -> frames ([] = none to be had)
+// Every request for a clip's frames goes through here, two at a time
+// (v2026.11.331). Each one used to go straight to the server, one per tile
+// the pointer crossed, and each could decode for seconds -- holding one of
+// the six connections a browser opens to a server. Six slow decodes and the
+// examiner's grading waited behind them: measured, a grading saved 9.4 s
+// after the key was pressed. Two at most leaves the rest for the page.
+const frameQueue = [];
+const frameWaiting = new Map();     // rel_path -> {promise, urgent}
 let framesBusy = 0;
 let framesGeneration = 0;
 const FRAME_WORKERS = 2;
 
-function prefetchFrames(relPath, generation) {
-  if (!relPath || framesReady.has(relPath)) return;
-  framesReady.set(relPath, null);   // claimed, so nothing asks twice
-  framesWanted.push({relPath, generation});
+function framesFor(relPath, {urgent = false, cachedOnly = false} = {}) {
+  const ready = framesReady.get(relPath);
+  if (Array.isArray(ready)) return Promise.resolve(ready);
+  const waiting = frameWaiting.get(relPath);
+  if (waiting && (waiting.urgent || !urgent)) return waiting.promise;
+  let resolve;
+  const promise = new Promise(r => { resolve = r; });
+  const job = {relPath, cachedOnly: cachedOnly && !urgent, urgent,
+               generation: framesGeneration, resolve};
+  frameWaiting.set(relPath, {promise, urgent});
+  // The clip under the pointer goes first.
+  if (urgent) frameQueue.unshift(job); else frameQueue.push(job);
   pumpFrames();
+  return promise;
 }
 
-async function pumpFrames() {
-  while (framesBusy < FRAME_WORKERS && framesWanted.length) {
-    const next = framesWanted.shift();
-    if (next.generation !== framesGeneration) {
-      framesReady.delete(next.relPath);   // a stale page; let it be asked again
+function pumpFrames() {
+  while (framesBusy < FRAME_WORKERS && frameQueue.length) {
+    const next = frameQueue.shift();
+    if (!next.urgent && next.generation !== framesGeneration) {
+      // Asked for a page that has gone; let it be asked again.
+      frameWaiting.delete(next.relPath);
+      next.resolve(null);
       continue;
     }
     framesBusy++;
     (async () => {
+      let got = null;
       try {
         const d = await api(`/api/frames?job=${jobId}` +
-                            `&file=${encodeURIComponent(next.relPath)}`);
-        framesReady.set(next.relPath, (d && d.frames) ? d.frames : []);
+                            `&file=${encodeURIComponent(next.relPath)}` +
+                            (next.cachedOnly ? "&cached=1" : ""));
+        got = (d && d.frames) ? d.frames : [];
+        // "Not made yet" is not "none to be had": only a real answer is kept.
+        if (got.length || !(d && d.pending)) framesReady.set(next.relPath, got);
+        else got = null;
       } catch (e) {
-        framesReady.set(next.relPath, []);
+        got = null;
       } finally {
         framesBusy--;
+        frameWaiting.delete(next.relPath);
+        next.resolve(got);
+        if (got && got.length) showPoster(next.relPath, got[0]);
         pumpFrames();
       }
     })();
   }
 }
 
+function showPoster(relPath, src) {
+  document.querySelectorAll(`img.poster[data-poster="${CSS.escape(relPath)}"]`)
+    .forEach(img => { if (!img.dataset.loaded) img.setAttribute("src", src); });
+}
+
 function watchForFrames(container) {
-  // Asked for only once a tile is actually on screen. Scrolling past a
-  // hundred videos quickly should not queue a hundred decodes.
+  // The frames of the clips on screen, asked for as made-or-not: never a
+  // decode in the request. The server makes the page's frames ahead
+  // (_Prefill) and this picks them up, so the first movement over a tile
+  // already has something to show.
   framesGeneration++;
   const generation = framesGeneration;
-  const videos = [...container.querySelectorAll("video[data-scrub]")];
-  if (!videos.length) return;
-
+  const posters = [...container.querySelectorAll("img.poster[data-poster]")];
+  if (!posters.length) return;
+  const ask = el => {
+    if (generation === framesGeneration)
+      framesFor(el.dataset.poster, {cachedOnly: true});
+  };
   if (typeof IntersectionObserver !== "function") {
-    videos.slice(0, 12).forEach(v => prefetchFrames(v.dataset.scrub, generation));
+    posters.slice(0, 24).forEach(ask);
     return;
   }
   const watcher = new IntersectionObserver((entries) => {
     entries.forEach(entry => {
       if (!entry.isIntersecting) return;
       watcher.unobserve(entry.target);
-      prefetchFrames(entry.target.dataset.scrub, generation);
+      ask(entry.target);
     });
   }, {root: $("results-scroll") || null, rootMargin: "200px"});
-  videos.forEach(video => watcher.observe(video));
+  posters.forEach(p => watcher.observe(p));
+}
+
+// A video element that is going away has to be told: removed from the page
+// while loading, Chrome kept its connection open until it was collected, and
+// the next request to the server waited for a free one.
+function releaseMedia(container) {
+  if (!container) return;
+  container.querySelectorAll("video").forEach(video => {
+    try { video.pause(); video.removeAttribute("src"); video.load(); }
+    catch (e) { /* it is going away regardless */ }
+  });
+}
+
+// A clip the browser cannot play -- HEVC where the browser has no decoder
+// for it, AVI, a carve -- played from a copy made for the browser instead
+// (/api/playable: FFmpeg, on the NVIDIA card where there is one). A display
+// copy; the evidence is the file, and the note beside the player says so.
+// One request per clip, shared: the details pane and the viewer can both
+// find they cannot play the same file, and each needs the copy.
+const playableAsked = new Map();
+function playableFallback(video, relPath, note) {
+  if (!video || video.dataset.playableWired) return;
+  video.dataset.playableWired = "1";
+  video.addEventListener("error", async () => {
+    if (video.dataset.display || !video.isConnected) return;
+    if (note) note.textContent = "This browser cannot play this file; making a " +
+                                 "copy it can play…";
+    try {
+      const key = `${jobId}|${relPath}`;
+      if (!playableAsked.has(key)) {
+        // The server makes it on a thread and answers at once; asked again
+        // each second until it is there, so no connection is held meanwhile.
+        const forJob = jobId;
+        playableAsked.set(key, (async () => {
+          const started = Date.now();
+          for (;;) {
+            const d = await api("/api/playable", {
+              method: "POST", headers: {"Content-Type": "application/json"},
+              body: JSON.stringify({job: forJob, file: relPath})});
+            if (!d.pending) return d;
+            if (forJob !== jobId) return {ok: false, error: "the case was closed"};
+            // Nobody left to play it: the copy is still made on the server,
+            // and the next time the clip is opened it is there.
+            if (!document.querySelector(`video[data-playable-wired]`)) {
+              return {ok: false, error: "the player was closed"};
+            }
+            if (note && video.isConnected) {
+              note.textContent = `Making a copy this browser can play… ` +
+                `${Math.round((Date.now() - started) / 1000)} s`;
+            }
+            await new Promise(r => setTimeout(r, 1000));
+          }
+        })());
+      }
+      const d = await playableAsked.get(key);
+      if (!d.ok) playableAsked.delete(key);    // may work after Settings change
+      if (!video.isConnected) return;
+      if (!d.ok) {
+        if (note) note.textContent = `No playable copy: ${d.error || "FFmpeg could not make one"}. ` +
+                                     `Open with… hands it to a player.`;
+        return;
+      }
+      video.src = d.url;
+      video.dataset.display = "1";
+      if (note) note.textContent = "Playing a display copy made for the browser " +
+        (d.how === "gpu" ? "on the graphics card " : "") +
+        "— the evidence file is unchanged, and is what is hashed and exported.";
+      video.play().catch(() => {});
+    } catch (e) {
+      playableAsked.delete(`${jobId}|${relPath}`);
+      if (note) note.textContent = e.message;
+    }
+  });
 }
 
 function wireTileScrub(tile, poster, relPath) {
@@ -1715,21 +1822,26 @@ function wireTileScrub(tile, poster, relPath) {
 
   const ensureFrames = async () => {
     if (frames) return;
-    const ready = framesReady.get(relPath);
-    if (Array.isArray(ready)) { frames = ready; setPoster(); return; }
-    try {
-      const d = await api(`/api/frames?job=${jobId}` +
-                          `&file=${encodeURIComponent(relPath)}`);
-      frames = (d && d.frames) ? d.frames : [];
-      framesReady.set(relPath, frames);
+    const got = await framesFor(relPath, {urgent: true});
+    if (got) {
+      frames = got;
       setPoster();
-    } catch (e) { frames = []; }
+      // Frames came first: they scrub at once and need no connection held
+      // open, so the video made in the meantime is let go.
+      if (frames.length && video && !videoReady) release();
+    }
   };
 
   const ensureVideo = () => {
+    // With its frames here already, a tile needs no video at all: scrubbing
+    // swaps pictures. A 4K clip seeked under the pointer was what "barely
+    // plays" looked like, and each one held a connection and a decoder.
+    if (frames && frames.length) return;
     if (video || videoFailed) return;
     const file = lookup(relPath);
-    if (!file) return;
+    // A format the browser does not play would only fail, after taking a
+    // connection to find that out.
+    if (!file || !file.previewable) return;
     video = document.createElement("video");
     video.muted = true;
     video.playsInline = true;
@@ -1773,6 +1885,8 @@ function wireTileScrub(tile, poster, relPath) {
 
   tile.addEventListener("mouseenter", () => {
     tile.classList.add("scrubbing");
+    const ready = framesReady.get(relPath);
+    if (Array.isArray(ready) && ready.length) { frames = ready; setPoster(); }
     ensureFrames();
     ensureVideo();
   });
@@ -1828,6 +1942,24 @@ function wireScrub(container) {
     if (!tile || tile.dataset.scrubWired) return;
     tile.dataset.scrubWired = "1";
     wireTileScrub(tile, poster, poster.dataset.poster || "");
+    // Not made yet is a 404 at once; asked again a little later, while the
+    // tile is still on the page, until the tile maker has got to it.
+    let tries = 0;
+    poster.addEventListener("load", () => { poster.dataset.loaded = "1"; });
+    poster.addEventListener("error", () => {
+      if (!poster.isConnected || tries >= 30) return;
+      tries++;
+      const ready = framesReady.get(poster.dataset.poster);
+      if (Array.isArray(ready) && ready.length) {
+        poster.setAttribute("src", ready[0]); return;
+      }
+      setTimeout(() => {
+        if (poster.isConnected && !poster.dataset.loaded) {
+          poster.setAttribute("src", `/api/poster?job=${jobId}&file=` +
+            `${encodeURIComponent(poster.dataset.poster)}&try=${tries}`);
+        }
+      }, Math.min(6000, 1500 * tries));
+    });
   });
 
   // The details pane keeps a real <video> -- there is one of them, it has
@@ -1844,16 +1976,10 @@ function wireScrub(container) {
 
     const ensureFrames = async () => {
       if (frames !== null || asking) return;
-      const ready = framesReady.get(relPath);
-      if (Array.isArray(ready)) { frames = ready; return; }
       asking = true;
       try {
-        const d = await api(`/api/frames?job=${jobId}` +
-                            `&file=${encodeURIComponent(relPath)}`);
-        frames = (d && d.frames) ? d.frames : [];
-        framesReady.set(relPath, frames);
-      } catch (e) { frames = []; }
-      finally { asking = false; }
+        frames = (await framesFor(relPath, {urgent: true})) || [];
+      } finally { asking = false; }
     };
 
     const show = (index) => {
@@ -2040,8 +2166,11 @@ function tilesAhead(all, list) {
   if (!jobId || running || !list.length) return;
   const start = all.indexOf(list[0]);
   if (start < 0) return;
-  const next = all.slice(start + list.length, start + 2 * list.length)
-    .filter(f => f.category === "image").map(f => f.rel_path);
+  // This page's videos (their posters are decoded frames) and the next
+  // page's pictures and videos.
+  const next = list.filter(f => f.category === "video").map(f => f.rel_path).concat(
+    all.slice(start + list.length, start + 2 * list.length)
+      .filter(f => f.category === "image" || f.category === "video").map(f => f.rel_path));
   const key = next[0] || "";
   if (!next.length || key === aheadSent) return;
   clearTimeout(aheadTimer);
@@ -2103,7 +2232,10 @@ function drawGallery(list, total) {
         // (v2026.11.328). The details pane still shows the large rendering.
         thumb = `<img loading="lazy" alt="${esc(f.name)}" src="/api/thumb?job=${jobId}` +
                 `&file=${encodeURIComponent(f.rel_path)}">`;
-      } else if (f.previewable && f.category === "video") {
+      } else if (f.category === "video") {
+        // Every video, the browser's formats or not: the poster and scrub
+        // frames are decoded by the server, so an AVI or a 3GP off a phone
+        // gets a picture too, instead of ".avi" (v2026.11.331).
         // Scrubbable: moving across the tile seeks the video, so a clip can
         // be judged without opening it. preload="metadata" fetches the
         // header only, so a page of videos does not download itself.
@@ -2114,8 +2246,11 @@ function drawGallery(list, total) {
         // became unresponsive. The tile is a picture, and a video element
         // is made only while the cursor is on it -- one at a time, released
         // on the way out.
+        // The poster is the clip's first scrub frame, made ahead by the
+        // server (/api/poster); until it is made the tile asks again.
         thumb = `<img class="poster" alt="${esc(f.name)}" loading="lazy" ` +
-                `data-poster="${esc(f.rel_path)}">` +
+                `data-poster="${esc(f.rel_path)}" src="/api/poster?job=${jobId}` +
+                `&file=${encodeURIComponent(f.rel_path)}">` +
                 `<span class="vidmark">▶</span>` +
                 `<span class="scrubhint">hover to scrub</span>`;
       } else {
@@ -2293,6 +2428,7 @@ function row(label, value, mono) {
          `<td class="${mono === false ? "" : "v"}">${shown}</td></tr>`;
 }
 
+let detailsSeq = 0;
 async function showDetails(relPath) {
   selectedPath = relPath;
   if (pane !== "details") return;   // the pane is showing something else
@@ -2300,11 +2436,17 @@ async function showDetails(relPath) {
   const box = $("details");
   $("details-col").style.display = "block";
   $("wrap").classList.add("with-details");
+  // Only the newest request may draw. Grading moves the cursor on at once,
+  // and an answer for the file before -- slow because a video was loading --
+  // landed after the one for the file now selected and drew over it.
+  const mine = ++detailsSeq;
+  releaseMedia(box);
   box.innerHTML = '<p class="hint" style="margin:0;">Loading…</p>';
   // A newly opened pane should show the file, not wherever it was scrolled to.
   $("details-col").scrollTop = 0;
   try {
     const d = await api(`/api/details?job=${jobId}&file=${encodeURIComponent(relPath)}`);
+    if (mine !== detailsSeq) return;
     const r = d.record;
     const fileUrl = `/api/file?job=${jobId}&file=${encodeURIComponent(relPath)}`;
 
@@ -2323,7 +2465,7 @@ async function showDetails(relPath) {
                 `preload="metadata" data-scrub="${esc(relPath)}" muted ` +
                 `playsinline data-film="${esc(relPath)}"></video></div>` +
                 `<div class="filmstrip" id="filmstrip"></div>` +
-                `<p class="hint" style="margin:-4px 0 8px;">Move across the ` +
+                `<p class="hint playnote" style="margin:-4px 0 8px;">Move across the ` +
                 `picture to scrub; the controls play it.</p>`;
 
     const copies = d.exact_copies.length
@@ -2495,6 +2637,8 @@ async function showDetails(relPath) {
     wireDetails(box);
     wireScrub(box);
     wireFilmstrip(box, relPath, r.ext);
+    playableFallback(box.querySelector("video[data-film]"), relPath,
+                     box.querySelector(".playnote"));
     box.querySelectorAll("[data-story]").forEach(b =>
       b.addEventListener("click", e => { e.preventDefault(); openStoryboard(b.dataset.story); }));
     box.querySelectorAll("[data-face]").forEach(b =>
@@ -2504,6 +2648,7 @@ async function showDetails(relPath) {
       if (selectedPath === relPath) drawMasks(box, list);
     });
   } catch (e) {
+    if (mine !== detailsSeq) return;
     box.innerHTML = `<p class="hint" style="color:var(--err); margin:0;">${esc(e.message)}</p>`;
   }
 }
@@ -2845,7 +2990,13 @@ function viewFullSize(file) {
   const media = file.category === "video"
     ? `<video src="${source}" controls autoplay muted></video>`
     : `<img src="${source}" alt="">`;
-  $("full-body").innerHTML = `<div class="maskwrap">${media}<div class="masks"></div></div>`;
+  releaseMedia($("full-body"));
+  $("full-body").innerHTML = `<div class="maskwrap">${media}<div class="masks"></div></div>` +
+    (file.category === "video" ? `<p class="hint playnote" style="margin:4px 8px;"></p>` : "");
+  if (file.category === "video") {
+    playableFallback($("full-body").querySelector("video"), file.rel_path,
+                     $("full-body").querySelector(".playnote"));
+  }
   $("full-body").classList.toggle("blurred", blurOn());
   fullFile = file;
   setMasking(false);
@@ -3052,12 +3203,16 @@ $("set-save").addEventListener("click", async () => {
                             agency: $("set-agency").value.trim(),
                             output_root: $("set-output").value.trim(),
                             category_region: $("set-region").value || "US",
-                            content_model: $("set-model").value.trim()})});
+                            content_model: $("set-model").value.trim(),
+                            ffmpeg_path: $("set-ffmpeg").value.trim()})});
     $("settings-modal").style.display = "none";
     $("status").textContent = "Settings saved on this machine.";
   } catch (e) { $("set-err").textContent = e.message; }
 });
 
+$("set-ffmpeg-browse").addEventListener("click", () =>
+  openBrowser(p => { $("set-ffmpeg").value = p; }, $("set-ffmpeg").value.trim(),
+              "Choose ffmpeg.exe"));
 $("set-model-browse").addEventListener("click", () =>
   openBrowser(p => { $("set-model").value = p; }, $("set-model").value.trim(),
               "Choose an ONNX image model"));
@@ -3361,8 +3516,14 @@ async function loadCases() {
             <div class="stat"><strong>${c.categorized.toLocaleString()}</strong>graded</div>
             <div class="stat">${esc((c.last_opened || c.created_at).slice(0, 10))}
               <br>${esc(c.examiner || "")}</div>
+            ${c.present ? `<button class="opencase" data-open-btn="${esc(c.out_dir)}"
+                    title="Open this case: its files and your gradings are read back. Nothing is carved or hashed again.">Open</button>` : ""}
             <button class="secondary tiny" data-forget="${esc(c.out_dir)}"
                     title="Remove from this list. The output folder is left alone.">✕</button>
+            <div class="openprog" aria-live="polite">
+              <div class="progress-outer"><div class="progress-inner"></div></div>
+              <div class="status"><span class="what">Starting…</span><span class="pct"></span></div>
+            </div>
           </div>`;
         }).join("") + `</div>`
       : `<p class="hint">No cases yet. Run an extraction, or scan a folder ` +
@@ -3380,6 +3541,13 @@ async function loadCases() {
         if (el.classList.contains("missing")) return;
         openCase(el.dataset.open);
       }));
+    $("cases-list").querySelectorAll("[data-open-btn]").forEach(b =>
+      b.addEventListener("click", e => {
+        e.stopPropagation();
+        openCase(b.dataset.openBtn);
+      }));
+    // Redrawn while a case is opening (Refresh): keep showing it.
+    if (openingCase) showOpening(openingCase, openingShown.what, openingShown.share);
     $("cases-list").querySelectorAll("[data-forget]").forEach(b =>
       b.addEventListener("click", async e => {
         e.stopPropagation();
@@ -3414,14 +3582,108 @@ async function restoreForgotten() {
   } catch (e) { toast(esc(e.message), true); }
 }
 
+// ---- opening a case, with how far it has got (v2026.11.331) -----------
+// Opening a large case took ten seconds and more with nothing on the screen,
+// and a second click started it again. The server opens it in the background
+// and says what it is doing; the row shows that as a bar.
+let openingCase = null;
+let openingShown = {what: "", share: 0};
+
+// Where each stage the server names sits on the bar: [from, to] of 100.
+const OPEN_STAGES = [
+  ["Reading the case's prepared file list", 0, 70],
+  ["Reading the case's list of files", 0, 40],
+  ["Preparing the files for the gallery", 40, 80],
+  ["Restoring earlier work on the case", 80, 88],
+  ["Counting the case", 88, 93],
+];
+
+function openRow(outDir) {
+  return document.querySelector(`#cases-list .case[data-open="${CSS.escape(outDir)}"]`);
+}
+
+function showOpening(outDir, what, share) {
+  openingShown = {what, share};
+  const list = document.querySelector("#cases-list .caselist");
+  if (list) list.classList.toggle("busy", !!outDir);
+  document.querySelectorAll("#cases-list .case.opening").forEach(r => {
+    if (r.dataset.open !== outDir) r.classList.remove("opening");
+  });
+  const row = outDir ? openRow(outDir) : null;
+  if (!row) return;
+  row.classList.add("opening");
+  const pct = Math.max(2, Math.min(100, Math.round(share)));
+  row.querySelector(".openprog .progress-inner").style.width = pct + "%";
+  row.querySelector(".openprog .what").textContent = what;
+  row.querySelector(".openprog .pct").textContent = pct + "%";
+  const button = row.querySelector(".opencase");
+  if (button) { button.textContent = "Opening…"; button.disabled = true; }
+}
+
+function endOpening() {
+  const was = openingCase;
+  openingCase = null;
+  const list = document.querySelector("#cases-list .caselist");
+  if (list) list.classList.remove("busy");
+  const row = was ? openRow(was) : null;
+  if (row) {
+    row.classList.remove("opening");
+    const button = row.querySelector(".opencase");
+    if (button) { button.textContent = "Open"; button.disabled = false; }
+  }
+}
+
+function openShare(stage, done, total) {
+  const known = OPEN_STAGES.find(s => s[0] === stage);
+  if (!known) return openingShown.share;
+  const [, from, to] = known;
+  const part = total > 0 ? Math.min(1, done / total) : 0.5;
+  return from + (to - from) * part;
+}
+
+function describeOpen(state) {
+  if (state.unit === "bytes" && state.total > 0) {
+    const mb = n => (n / 1048576).toFixed(n > 1e8 ? 0 : 1);
+    return `${state.stage} — ${mb(state.done)} of ${mb(state.total)} MB`;
+  }
+  if (state.unit === "files" && state.total > 0) {
+    return `${state.stage} — ${state.done.toLocaleString()} of ` +
+           `${state.total.toLocaleString()}`;
+  }
+  return `${state.stage}…`;
+}
+
+async function followOpen(jobId, outDir, ticket) {
+  // Polled, not streamed: a quarter of a second is quick enough to read and
+  // costs the server nothing it notices.
+  for (;;) {
+    await new Promise(r => setTimeout(r, 250));
+    if (ticket !== pageTicket) return null;
+    const state = await api(`/api/cases/opening?job=${encodeURIComponent(jobId)}`);
+    if (state.ready) {
+      if (state.error) throw new Error(`Not opened: ${state.error}`);
+      return state.result;
+    }
+    showOpening(outDir, describeOpen(state),
+                openShare(state.stage, state.done || 0, state.total || 0));
+  }
+}
+
 async function openCase(outDir) {
+  // A second click on the case being opened is not a second open.
+  if (openingCase === outDir) return;
   $("cases-err").textContent = "";
   const ticket = claimPage();
+  openingCase = outDir;
+  showOpening(outDir, "Starting…", 2);
   try {
-    const d = await api("/api/cases/open", {
+    const started = await api("/api/cases/open", {
       method: "POST", headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({out_dir: outDir})});
-    if (ticket !== pageTicket) return;      // a newer open or run took the page
+      body: JSON.stringify({out_dir: outDir, background: true})});
+    const d = started.opening ? await followOpen(started.job_id, outDir, ticket)
+                              : started;
+    if (!d || ticket !== pageTicket) return;  // a newer open or run took the page
+    showOpening(outDir, "Loading the gallery…", 96);
     const st = await api(`/api/status?job_id=${d.job_id}`);
     if (ticket !== pageTicket) return;
     jobId = d.job_id;
@@ -3441,7 +3703,12 @@ async function openCase(outDir) {
     showTab("review");
     toast(`Opened ${esc(d.case.case_number || outDir)} — ` +
           `${caseSize().toLocaleString()} file(s), nothing re-carved.`);
-  } catch (e) { $("cases-err").textContent = e.message; }
+  } catch (e) {
+    $("cases-err").textContent = e.message;
+    toast(esc(e.message), true);
+  } finally {
+    if (openingCase === outDir) endOpening();
+  }
 }
 
 let workspace = "cases";
@@ -3789,8 +4056,21 @@ async function showInstalled() {
       `similarity     : ${c.similarity && c.similarity.available
                           ? "yes" : (c.similarity || {}).message || "no"}`,
       `video frames   : ${c.video_frames && c.video_frames.available
-                          ? "OpenCV " + c.video_frames.version
+                          ? (c.video_frames.decoder || "OpenCV") +
+                            (c.video_frames.version ? " (OpenCV " + c.video_frames.version + " beside it)" : "")
                           : (c.video_frames || {}).message || "no"}`,
+      `FFmpeg         : ${((c.video_frames || {}).ffmpeg || {}).ffmpeg
+                          ? c.video_frames.ffmpeg.ffmpeg + " — " +
+                            (c.video_frames.ffmpeg.cuda
+                              ? `${c.video_frames.ffmpeg.gpus} NVIDIA graphics cards decode` +
+                                (c.video_frames.ffmpeg.nvenc ? " and encode playable copies" : "")
+                              : c.video_frames.ffmpeg.why || "on the processor")
+                          : ((c.video_frames || {}).ffmpeg || {}).why || "not found"}`,
+      `image models   : ${(c.models_on || {}).runtime
+                          ? c.models_on.runtime + " — " + (c.models_on.providers || []).join(", ") +
+                            (c.models_on.why ? " — " + c.models_on.why : "")
+                          : (c.models_on || {}).why || "OpenCV"}`,
+      `measure them   : ForensicMediaExtractor bench --case <case folder>`,
       `LAVA           : ${c.lava_installed ? "found"
                           : "not found on this machine"}`,
       `output folder  : ${c.output_root || ""}`,
@@ -4115,6 +4395,16 @@ async function openSettings() {
     await fillRegions(d.category_region || "US");
     $("set-model").value = d.content_model || "";
     $("set-model-state").textContent = "";
+    $("set-ffmpeg").value = d.ffmpeg_path || "";
+    try {
+      const c = await api("/api/capabilities");
+      const f = (c.video_frames || {}).ffmpeg || {};
+      $("set-ffmpeg-state").innerHTML = f.ffmpeg
+        ? (f.cuda ? `Using ${esc(f.ffmpeg)}: video decodes on ${f.gpus} NVIDIA graphics card${f.gpus === 1 ? "" : "s"}` +
+                    (f.nvenc ? ", and playable copies are encoded on them." : ".")
+                  : `Using ${esc(f.ffmpeg)}, on the processor. <span class="warn">${esc(f.why || "")}</span>`)
+        : `<span class="warn">${esc(f.why || "No FFmpeg found.")}</span>`;
+    } catch (e) { /* a convenience line */ }
     // Blank is the bundled model, so the line says what a search would use.
     try {
       const m = await api("/api/content/model?path=" +
