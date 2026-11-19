@@ -234,6 +234,8 @@ def gather(out_dir: str, *, categories=None, flags=None, sha256=None,
     wanted_files = set(sha256) if sha256 else None
 
     hash_matches = _hash_matches(out_dir)
+    from fme.review import setaside
+    shown_again = setaside.media_holding_a_find(records)
     rows = []
     for record in records:
         digest = record.get("sha256", "")
@@ -271,6 +273,12 @@ def gather(out_dir: str, *, categories=None, flags=None, sha256=None,
         row["coordinates"] = ("" if record.get("latitude") is None
                               else f"{record['latitude']}, {record['longitude']}")
         row["hash_sets"] = _hash_set_text(hash_matches, digest)
+        # Listed like every other file, and counted where it was decided --
+        # but a container, database or property list nobody grades is not
+        # an Uncategorized file waiting for review, and the summary says how
+        # many of its Uncategorized are these (fme/review/setaside.py).
+        row["set_aside_ungraded"] = (code == uncategorized
+                                     and setaside.is_set_aside(record, shown_again))
         rows.append(row)
 
     return {"rows": rows, "manifest": manifest, "out_dir": out_dir,
@@ -1251,6 +1259,11 @@ def _contents_block(rows, scheme, total_in_case: int,
                 f'{_esc(entry["name"])}</td>'
                 f'<td class="num">{entry["count"]:,}</td>'
                 f'<td class="pct">{entry["percent"]}%</td></tr>')
+        if contents.get("set_aside"):
+            body.append(
+                f'<tr><td style="padding-left:36px; color:#666; font-style:italic;">'
+                f'{_esc(report_contents.SET_ASIDE_NOTE)}</td>'
+                f'<td class="num">{contents["set_aside"]:,}</td><td></td></tr>')
 
     if contents["flags"]:
         body.append(line("By flag", "", head=True))

@@ -626,8 +626,12 @@ def api_basemap_style():
     from fme.engines import basemaps
     name = basemaps.get_active()
     if not name:
-        return jsonify({"ok": False, "error": "No basemap has been imported. "
-                        "Import a .pmtiles or .mbtiles file under Settings."}), 404
+        # Not a fault: most machines have no basemap. Answered 200 with
+        # ok false -- the page says the same either way -- so opening the
+        # case map no longer leaves a 404 in the browser's console.
+        return jsonify({"ok": False, "missing": True,
+                        "error": "No basemap has been imported. "
+                        "Import a .pmtiles or .mbtiles file under Settings."})
     try:
         drawn = basemaps.style(name, flavor=request.args.get("flavor", "dark"))
     except (OSError, ValueError) as exc:

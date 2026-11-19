@@ -19,6 +19,26 @@ let jobId = null, files = [], filter = "all", view = "gallery", timer = null;
 let pageTicket = 0;
 function claimPage() { return ++pageTicket; }
 
+// A run reads its options once, when Start is pressed. They stayed open to
+// change while it ran, and a box ticked then -- "Extract media from SQLite
+// databases" after the run had begun -- did nothing, without a word. While
+// a run is going they are locked, and say why (v2026.11.335).
+const RUN_OPTIONS = ["mode", "align", "images-only", "videos-only", "no-deleted",
+  "include-system", "databases", "hash-source", "find-members", "carve-files",
+  "scan-inside", "opt-artifacts", "workers"];
+function lockRunOptions(on) {
+  for (const id of RUN_OPTIONS) {
+    const el = document.getElementById(id);
+    if (!el) continue;
+    el.disabled = on;
+    const label = el.closest("label") || el;
+    if (on) label.title = "Set when this run started. A change applies to the next run.";
+    else label.removeAttribute("title");
+  }
+  const note = document.getElementById("run-options-note");
+  if (note) note.style.display = on ? "block" : "none";
+}
+
 // Every request that changes something carries this header. A browser
 // will not add it to a request from another website without asking this
 // server first, and the server never agrees, so the header is how the
@@ -313,6 +333,7 @@ window.addEventListener("beforeunload", (e) => {
     $("job-badge").textContent = caseBadge();
     if (j.status === "running") {
       running = true;
+      lockRunOptions(true);
       $("btn-start").disabled = true;
       $("btn-cancel").style.display = "inline-block";
       $("status").textContent = "rejoined a run already in progress…";
@@ -577,6 +598,7 @@ $("btn-start").addEventListener("click", async () => {
     openedCase = null;
     jobId = d.job_id;
     running = true;
+    lockRunOptions(true);
     $("job-badge").style.display = "inline-block";
     $("job-badge").textContent = caseBadge();
     poll();
@@ -689,6 +711,7 @@ async function poll() {
     }
 
     running = false;
+    lockRunOptions(false);
     $("btn-start").disabled = false;
     $("btn-cancel").style.display = "none";
     $("btn-cancel").disabled = false;
@@ -730,6 +753,7 @@ async function poll() {
     pollFailures += 1;
     if (pollFailures < 5) { setTimeout(() => poll(), 1500); return; }
     running = false;
+    lockRunOptions(false);
     $("err").textContent = e.message;
     $("btn-start").disabled = false;
     $("btn-cancel").style.display = "none";
@@ -1175,10 +1199,31 @@ function pageOf(list) {
     const note = $("page-capped");
     if (note) note.style.display = "none";
   }
+  const holding = $("hold-page") ? $("hold-page").checked : true;
   if (!size || list.length <= size) {
-    // Everything fits: there is no page to leave, so nothing to pin.
+    // Everything fits on one page -- and that page is held too. It was not
+    // ("there is no page to leave, so nothing to pin"): every file graded
+    // out of the filter vanished at the next redraw, which grading a
+    // selection, opening a pane or a store check finishing all cause --
+    // with Hold the page ticked (reported against v2026.11.334). Held, a
+    // graded file stays where it is; a file that newly matches (a run still
+    // adding to the case) is added at the end, so the page still grows.
     page = 0;
-    unpin();
+    if (!holding) {
+      unpin();
+      return list;
+    }
+    const fitKey = pageSignature(files.length);
+    if (pinned && fitKey === pinKey) {
+      const byPath = new Map(files.map(f => [f.rel_path, f]));
+      const held = new Set(pinned);
+      const kept = pinned.map(path => byPath.get(path)).filter(Boolean)
+        .concat(list.filter(f => !held.has(f.rel_path)));
+      pinned = kept.map(f => f.rel_path);
+      return kept;
+    }
+    pinned = list.map(f => f.rel_path);
+    pinKey = fitKey;
     return list;
   }
   const pages = Math.ceil(list.length / size);
@@ -1191,8 +1236,7 @@ function pageOf(list) {
     if (area) area.scrollTo({top: 0});
   }
 
-  const keepPage = $("hold-page") ? $("hold-page").checked : true;
-  if (!keepPage) {
+  if (!holding) {
     unpin();
     return list.slice(page * size, (page + 1) * size);
   }
@@ -5672,10 +5716,11 @@ function hiddenContainersNote() {
                   : files.filter(f => f.container).length;
   if (!n) return "";
   return `<span class="catchip containers-note" data-show-containers="1" ` +
-    `title="Archives, databases and caches other media came out of. They are ` +
-    `not pictures, so they are not shown or counted here; they are in the ` +
+    `title="Archives, databases and caches other media came out of, and the ` +
+    `SQLite databases and property lists a run recovered. They are not ` +
+    `graded, so they are not shown or counted here; they are in the ` +
     `manifest and the reports. Click to show them.">` +
-    `+ ${n.toLocaleString()} container(s) not shown</span>`;
+    `+ ${n.toLocaleString()} not shown: containers, databases, plists</span>`;
 }
 
 function renderCategoryFilter(counts) {
@@ -5685,9 +5730,13 @@ function renderCategoryFilter(counts) {
   // set to that code; the count has to include both.
   const countOf = c => counts[c.code] || 0;
 
+  // "All" is what the gallery shows under All: the categories added up, so
+  // a hidden container is out of it as it is out of each of them. It was
+  // the whole case, which no longer equaled the chips beside it.
+  const shownInAll = Object.values(counts).reduce((a, n) => a + (n || 0), 0);
   $("cat-bar").innerHTML =
     `<span class="catchip ${catFilter === "" ? "on" : ""}" data-cat-filter="">` +
-    `All <span class="n">${caseSize().toLocaleString()}</span></span>` +
+    `All <span class="n">${shownInAll.toLocaleString()}</span></span>` +
     categories.map(c => {
       const n = countOf(c);
       return `<span class="catchip ${String(c.code) === catFilter ? "on" : ""}` +
@@ -6304,6 +6353,15 @@ $("store-scan").addEventListener("click", async () => {
   $("store-scan").disabled = true;
   $("store-scan").textContent = "Checking…";
   const forJob = jobId;
+  // Which case this check is for. The check takes minutes on a large case,
+  // and opening another case meanwhile drew the first case's result -- the
+  // message, the status line, the Hashes panel -- on the second, which then
+  // looked checked when it was not. Every await is followed by a look at
+  // the ticket; an answer for a case no longer open is dropped from the
+  // screen and said as belonging to that case (the server has already kept
+  // it, and applied its categories, in that case's own file).
+  const ticket = pageTicket;
+  const elsewhere = () => ticket !== pageTicket;
   try {
     // On a thread on the server, asked after each second: a case of 200,000
     // files is minutes against a shared store, and the button saying
@@ -6314,9 +6372,8 @@ $("store-scan").addEventListener("click", async () => {
       body: JSON.stringify({job: forJob, background: true})});
     while (state.state === "running") {
       await new Promise(r => setTimeout(r, 1000));
-      if (forJob !== jobId) return;                  // another case opened
       state = await api(`/api/store/scan?job=${encodeURIComponent(forJob)}`);
-      if (state.state === "running") {
+      if (state.state === "running" && !elsewhere()) {
         $("store-scan").textContent =
           `Checking… ${Math.round(state.seconds || 0)} s`;
       }
@@ -6326,6 +6383,13 @@ $("store-scan").addEventListener("click", async () => {
     }
     const d = state.result;
     const categorized = (d.applied && d.applied.categorized) || 0;
+    if (elsewhere()) {
+      toast(esc(`The store check of the case you left has finished: ` +
+                `${d.matched.toLocaleString()} matched` +
+                (categorized ? `, ${categorized.toLocaleString()} categorized` : "") +
+                `. Open that case again to see it; this case has not been checked.`));
+      return;
+    }
     const ended = `Store check finished in ${Math.round(state.seconds || 0)} s: ` +
       `${d.checked.toLocaleString()} file(s) checked, ` +
       `${d.matched.toLocaleString()} matched` +
@@ -6349,7 +6413,11 @@ $("store-scan").addEventListener("click", async () => {
         `${c.toLocaleString()} file(s) in ${esc(n)}`).join("<br>") +
       `<div class="p" style="margin-top:6px;">${esc(d.csv)}</div>`;
     $("store-result").style.display = "block";
-    const st = await api(`/api/status?job_id=${jobId}`);
+    const st = await api(`/api/status?job_id=${encodeURIComponent(forJob)}`);
+    // The file list of the case this check was for, and only while it is
+    // still the case on the page: assigned after a switch, it put one
+    // case's files under another's job -- the v2026.11.319 race.
+    if (elsewhere()) return;
     files = takeFiles(st, files);
     // The check writes its categories to the case, and the gallery draws
     // them from the case's decisions -- which were never read again, so
@@ -6359,6 +6427,10 @@ $("store-scan").addEventListener("click", async () => {
     render();
     if (selectedPath) showDetails(selectedPath);
   } catch (e) {
+    if (elsewhere()) {
+      toast(esc(`The store check of the case you left did not finish: ${e.message}`), true);
+      return;
+    }
     $("store-err").textContent = e.message;
     toast(esc(e.message), true);
   }
@@ -6810,14 +6882,24 @@ $("browse-modal").addEventListener("click", e => {
 });
 function dirOf(p) { const i = Math.max(p.lastIndexOf("/"), p.lastIndexOf("\\")); return i > 0 ? p.slice(0, i) : ""; }
 
+// Only the folder asked for last is drawn. Two listings in flight -- a
+// quick second click, a slow network drive, the picker opened again --
+// landed in the order they finished, so the picker could end up on a
+// folder already left, with Up and New folder set for that one.
+let browseAsked = 0;
 async function loadDir(path) {
+  const asked = ++browseAsked;
   try {
     const d = await api("/api/browse?path=" + encodeURIComponent(path || ""));
+    if (asked !== browseAsked) return;
     $("browse-path").value = d.path || "Drives";
     // "" means the drive list, null means there is genuinely nothing above.
     // Treating them the same is what trapped the picker on one drive.
     $("browse-up").dataset.parent = d.parent === null ? "" : d.parent;
     $("browse-up").disabled = d.parent === null || d.at_drive_list;
+    // A folder can only be made inside a folder, not in the list of drives.
+    $("browse-newdir").disabled = !!d.at_drive_list || !d.path;
+    closeNewFolder();
 
     $("browse-roots").innerHTML = (d.roots || []).map((r, i) =>
       `<span class="chip" data-root="${i}">${esc(r.name)}</span>`).join("");
@@ -6840,9 +6922,45 @@ async function loadDir(path) {
         $("browse-sel").textContent = picked;
         $("browse-pick").disabled = false;
       }));
-  } catch (e) { $("browse-list").innerHTML = `<p class="hint" style="padding:10px;color:var(--err)">${esc(e.message)}</p>`; }
+  } catch (e) {
+    if (asked !== browseAsked) return;
+    $("browse-list").innerHTML = `<p class="hint" style="padding:10px;color:var(--err)">${esc(e.message)}</p>`;
+  }
 }
 $("browse-up").addEventListener("click", () => loadDir($("browse-up").dataset.parent));
+
+// A new folder, made where the picker is and then opened, so "Use this
+// folder" takes it (v2026.11.335). Typed into the picker itself: a browser
+// prompt() would stop the page until it was answered.
+function closeNewFolder() {
+  $("browse-newdir-row").style.display = "none";
+  $("browse-newdir-err").textContent = "";
+}
+$("browse-newdir").addEventListener("click", () => {
+  $("browse-newdir-row").style.display = "flex";
+  $("browse-newdir-err").textContent = "";
+  $("browse-newname").value = "";
+  $("browse-newname").focus();
+});
+$("browse-newdir-cancel").addEventListener("click", closeNewFolder);
+async function makeNewFolder() {
+  const parent = $("browse-path").value;
+  const name = $("browse-newname").value.trim();
+  try {
+    const d = await api("/api/browse/mkdir", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({parent, name})});
+    await loadDir(d.path);
+    $("browse-sel").textContent = `Made ${d.path} -- press Use this folder to choose it.`;
+  } catch (e) {
+    $("browse-newdir-err").textContent = e.message;
+  }
+}
+$("browse-newdir-go").addEventListener("click", makeNewFolder);
+$("browse-newname").addEventListener("keydown", e => {
+  if (e.key === "Enter") { e.preventDefault(); makeNewFolder(); }
+  if (e.key === "Escape") { e.preventDefault(); closeNewFolder(); }
+});
 $("browse-pick-dir").addEventListener("click", () => {
   const dir = $("browse-path").value;
   if (!dir || dir === "Drives") return;

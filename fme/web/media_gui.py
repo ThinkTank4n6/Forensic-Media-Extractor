@@ -59,6 +59,7 @@ from fme.review import casedb
 from fme.web import compression
 from fme.web import request_guard
 from fme.review import hashsets
+from fme.review import setaside
 from fme.review import regions
 from fme.review import hashstore
 from fme.review import remotestore
@@ -1013,6 +1014,59 @@ def _case_entries(out_dir: str, job_id: str) -> tuple:
     return entries, summary, total
 
 
+# Jobs whose files were let go because their case was opened again: the id
+# is kept so a request naming one is told so, rather than answered from an
+# empty list as if the case had no files.
+RELEASED_JOBS: set = set()
+
+
+def _release_older_copies(out_dir: str, keep: str) -> int:
+    """Every open of a case made a new job holding the case's whole file
+    list, and none was ever let go: about 200 MB a time for a case of
+    221,292 files, so a day of reopening one large case on a 16 GB machine
+    held gigabytes of lists nobody could reach (v2026.11.335). Earlier copies
+    of the same case are released when it is opened again; another case
+    stays open, so two cases side by side in two windows still work."""
+    from fme.review import galleryquery
+    freed = []
+    with JOBS_LOCK:
+        for other, job in JOBS.items():
+            if (other == keep or job.get("released")
+                    or job.get("status") == "running" or not job.get("out_dir")
+                    or not _same_dir(job["out_dir"], out_dir)):
+                continue
+            freed.append(job.get("files") or [])
+            job.update(files=[], hash_matches={}, released=True)
+            RELEASED_JOBS.add(other)
+    for files in freed:
+        galleryquery.CACHE.forget(files)
+    if freed:
+        LOG.info("let go of %d earlier copy(ies) of %s", len(freed), out_dir)
+    return len(freed)
+
+
+@app.before_request
+def _refuse_released_job():
+    """A request for a copy of a case that was opened again since -- a second
+    window left on it -- is told so plainly. Answered from the released
+    copy's empty list it would have shown a case with no files."""
+    if not RELEASED_JOBS:
+        return None
+    ident = request.args.get("job") or request.args.get("job_id")
+    # A large body is not read twice for this: the routes that write by hash
+    # refuse a file the job does not hold (_refuse_foreign), and a released
+    # job holds none.
+    if not ident and request.method == "POST" and (request.content_length or 0) < 2 ** 20:
+        body = request.get_json(silent=True)
+        if isinstance(body, dict):
+            ident = body.get("job") or body.get("job_id")
+    if ident and ident in RELEASED_JOBS:
+        return error_response(LookupError(
+            "This case was opened again since this window opened it. Reload "
+            "the page and open the case again."), status=410)
+    return None
+
+
 def _open_case(out_dir: str, job_id: str) -> dict:
     """A finished case turned back into a job: what /api/cases/open answers.
     Progress goes to OPENING[job_id] when the page is polling for it."""
@@ -1047,6 +1101,7 @@ def _open_case(out_dir: str, job_id: str) -> dict:
             "_cancel": threading.Event(), "reopened": True,
         }
         LAST_JOB["id"] = job_id
+    _release_older_copies(out_dir, job_id)
     # Bring back what earlier sessions worked out, so a reopened case is
     # where it was left rather than where it started.
     case = _case_for(job_id)
@@ -1386,18 +1441,10 @@ def _accel_status() -> dict:
     return accel.status()
 
 
-def _media_holding_a_find(rows) -> set:
-    """Source paths of pictures and videos something was found inside by a
-    byte scan (a photo's own EXIF thumbnail, a video's cover art: recorded as
-    "<path>::+<offset>"). Cases made before v2026.11.334 marked these as
-    containers, which hid the full picture from the gallery and left it
-    Uncategorized with no tile to grade it from; they are shown again."""
-    inside = set()
-    for f in rows:
-        where = f.get("source_path") or ""
-        if "::+" in where:
-            inside.add(where.split("::+", 1)[0])
-    return inside
+# Which files are not for grading -- containers, and recovered databases and
+# property lists -- is decided in fme/review/setaside.py, for the gallery
+# here and for the reports alike.
+_media_holding_a_find = setaside.media_holding_a_find
 
 
 def _file_entries(rows) -> list:
@@ -1440,9 +1487,7 @@ def _job_file_entry(f: dict, shown_again=frozenset()) -> dict:
         "body_serial_present": bool(f.get("body_serial")),
         # Other media came out of this file: it is in the manifest and the
         # reports, but it is not a picture, so the gallery leaves it out.
-        "container": bool(f.get("container")) and not (
-            f.get("category") in ("image", "video", "audio")
-            and (f.get("source_path") or "") in shown_again),
+        "container": setaside.is_set_aside(f, shown_again),
         # What this tile stands for: identical copies found elsewhere, and
         # how many files look like it.
         "copies": int(f.get("instances") or 1),
@@ -1746,6 +1791,60 @@ def api_browse():
                                        and os.path.splitext(e["name"])[1].lower()
                                        .lstrip(".") in (media_core.IMAGE_EXTS
                                                         | media_core.VIDEO_EXTS))})
+
+
+# Names Windows will not take for a folder, whatever the machine running this:
+# a case folder made here is often copied to a Windows machine later.
+_RESERVED_NAMES = {"CON", "PRN", "AUX", "NUL",
+                   *(f"COM{n}" for n in range(1, 10)), *(f"LPT{n}" for n in range(1, 10))}
+_BAD_NAME_CHARACTERS = set('<>:"/\\|?*') | {chr(n) for n in range(32)}
+
+
+def _folder_name_problem(name: str) -> str:
+    """Why this cannot be a folder's name, or "" when it can."""
+    if not name:
+        return "Type a name for the new folder."
+    if name in (".", ".."):
+        return "That name means a folder that is already there."
+    bad = sorted({c for c in name if c in _BAD_NAME_CHARACTERS})
+    if bad:
+        shown = " ".join(dict.fromkeys(c if c.isprintable() else "a control character"
+                                       for c in bad))
+        return f"A folder name cannot contain {shown}."
+    if name[-1] in ". ":
+        return "A folder name cannot end with a period or a space."
+    if name.split(".")[0].upper() in _RESERVED_NAMES:
+        return f"Windows reserves the name {name.split('.')[0]}; choose another."
+    if len(name) > 200:
+        return "That name is too long."
+    return ""
+
+
+@app.route("/api/browse/mkdir", methods=["POST"])
+def api_browse_mkdir():
+    """Make a folder inside the one the picker is showing (v2026.11.335):
+    choosing a results folder used to mean leaving the program to make one.
+    One new folder, by name, in a folder that exists -- never a path, never
+    a chain of folders, never one that is already there."""
+    data = request.get_json(force=True) or {}
+    parent = (data.get("parent") or "").strip()
+    name = (data.get("name") or "").strip()
+    if not parent or not os.path.isdir(parent):
+        return error_response(NotADirectoryError(
+            "Open the folder the new one should go in first."))
+    problem = _folder_name_problem(name)
+    if problem:
+        return error_response(ValueError(problem))
+    full = os.path.join(os.path.abspath(parent), name)
+    if os.path.lexists(full):
+        return error_response(FileExistsError(
+            f"There is already something called {name} in that folder."))
+    try:
+        os.mkdir(full)
+    except OSError as exc:
+        return error_response(exc, status=403)
+    LOG.info("made folder %s", full)
+    return jsonify({"ok": True, "path": full})
 
 
 def _running_job_for(path: str, locked: bool = False, ignore: str = ""):

@@ -293,7 +293,9 @@ try:
                   f"{before} decision(s) -> {after}")
 
             # It has to reach the case on disk, not just the screen.
-            graded = api(f"/api/case?job={job}")
+            # The page's own job: opening the case from the list made a new
+            # one and let go of the run's (v2026.11.335).
+            graded = api(f"/api/case?job={page.evaluate('jobId')}")
             recorded = len(graded.get("decisions") or {})
             check("and the case records it", recorded > 0,
                   f"{recorded} decision(s) in the case")

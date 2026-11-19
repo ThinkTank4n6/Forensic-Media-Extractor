@@ -44,10 +44,15 @@ because two ways into one thing is two things to keep working.
 4. Click **Load / Inspect**. Read what it says the evidence is before running
    anything.
 5. Set a **Results folder** with room. A run can produce more data than the
-   evidence itself.
+   evidence itself. In **Browse…**, **New folder** makes a folder inside the
+   one shown (type its name, press Enter) and opens it; then press **Use
+   this folder**.
 6. Fill in **Case number**, **Examiner** and **Evidence item**. With a case
    number the run also writes `ProjectVIC.json` and a LAVA set.
-7. Click **Start Extraction**.
+7. Click **Start Extraction**. The options are read at that moment: while
+   the run is going they are locked, and a change applies to the next run.
+   To add something a run left out (say, media inside SQLite databases), let
+   it finish or cancel it, and run again into a new results folder.
 8. When it finishes, grade the results, then **Export report**.
 
 ---
@@ -1324,8 +1329,15 @@ a picture; its contents are already listed one by one. It stays in the
 manifest and the reports with its hashes — it is evidence — but it gets no
 tile. **Show containers** in the toolbar brings them in. While they are
 hidden the category bar does not count them either, and says how many it is
-leaving out ("+ 12 container(s) not shown"; click it to show them), so a
-case graded to the end reads 0 Uncategorized.
+leaving out ("+ 12 not shown: containers, databases, plists"; click it to
+show them), so a case graded to the end reads 0 Uncategorized.
+
+The SQLite databases and binary property lists a run recovers with **also
+recover artifacts** are set aside the same way: nobody gives a database a
+category, so they are not in the gallery, the category bar or Not yet
+reviewed, and **Show containers** brings them back. They stay in the
+manifest, the reports and the exports. Zips and PDFs recovered the same way
+are still shown for grading.
 
 A photo is never a container because a smaller picture came out of it: its
 own EXIF thumbnail, or a video's cover art, is listed as a file of its own

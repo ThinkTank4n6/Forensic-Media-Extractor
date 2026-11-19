@@ -626,6 +626,14 @@ class Cache:
         self._lock = threading.Lock()
         self._items = collections.OrderedDict()
 
+    def forget(self, files: list) -> None:
+        """Let go of everything kept for this list: every entry holds the
+        list it was made from, so a case's list released by the program
+        stayed in memory until 24 other states had pushed it out."""
+        with self._lock:
+            for key in [k for k, v in self._items.items() if v and v[0] is files]:
+                del self._items[key]
+
     def visible(self, files: list, decisions: dict, version, raw: dict,
                 st: State) -> list:
         """The filtered list, with only the files whose decision changed

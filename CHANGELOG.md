@@ -4,6 +4,112 @@ The release number is in `VERSION` and is reported by both GUIs, the console
 banner, and the Project VIC and LAVA exports, so a report can be traced back
 to the build that produced it.
 
+## v2026.11.335 — Hold the page, databases and plists not graded, New folder, a code review
+
+### Hold the page held nothing when the filter's files fit on one page
+
+Reported against v2026.11.334: "when categorizing images, even with Hold the
+page checked, it is still removing those images from the view." When every
+file the filter shows fits on one page -- a case of a few hundred files, or
+Per page set high -- the page was never held ("there is no page to leave, so
+nothing to pin"). A number key only repaints the tile, so one grading looked
+held; the next redraw -- grading a selection, opening a pane, a flag, a store
+check finishing -- took out every file graded out of the filter at once. A
+page that fits is held now like any other: a graded file stays where it is,
+and a file that newly matches (a run still adding to the case) is added at
+the end. A case paged from the server (past 20,000 files) was not affected.
+`tests/test_hold_page_grading.py` grades one by one and as a selection, then
+redraws, on both paths; on the .334 page the case held whole lost its graded
+tiles.
+
+### From the code review (ranked; each with a test that fails without it)
+
+1. **A store check's result appeared on the wrong case.** Since .334 the
+   check runs on the server and the page asks after it each second, and the
+   page looked at whether the case had changed only before each question.
+   Opening case B while case A was being checked -- or while the check that
+   starts by itself after a run was still going -- put "Store check
+   finished: 3 matched" on B, in the corner and the status line, with A's
+   figures on the Hashes tab: B looked checked when it was not. The file
+   list it read next was assigned to whatever case was open, the race
+   v2026.11.319 fixed elsewhere (one case's files under another's job,
+   where a grading is written to the second). The handler now keeps the
+   ticket of the case it started on and drops an answer for any other,
+   saying in the corner that the case left has finished.
+   `tools/repro/repro_store_check_wrong_case.py` is the sequence in 22
+   lines with the server mocked; `tests/test_store_check_case_switch.py`
+   holds the answer back in Chromium while case B is opened, and on the
+   .334 page shows B "Store check finished... 3 matched".
+2. **The report called containers, databases and plists "Uncategorized"**
+   while the gallery's bar read 0, so a case reviewed to the end said
+   otherwise on paper without a word why. They are still listed and still
+   counted where they were decided; the summary, in HTML, Word and PDF alike,
+   now says how many of the Uncategorized are files not for grading. Which
+   files those are is decided once, in `fme/review/setaside.py`, for the
+   gallery and the reports.
+3. **Every open of a case kept the case's whole file list for good** -- about
+   200 MB a time for 221,292 files -- and none was let go, so a day of
+   reopening one large case on a 16 GB machine held gigabytes. Opening a case
+   again releases its earlier copies, and the gallery's cache lets go of
+   them too; a request still naming one (a second window) is answered 410,
+   "This case was opened again... reload", rather than from an empty list as
+   if the case had no files. Another case stays open.
+   `tests/test_reopen_releases.py`.
+4. With no basemap imported, opening the case map left a 404 in the
+   browser's console; "no basemap" is the usual state, not a fault, and is
+   answered 200 with ok false. The page says the same either way.
+5. The bar's **All** counted the whole case, hidden files included, so it no
+   longer equaled the categories beside it; it is now their sum.
+6. **The folder picker could end on a folder already left.** Each listing
+   was drawn when it arrived, so with two in flight -- a quick second
+   click, a slow network drive, the picker opened again -- the older one
+   could land last and take the picker back, Up and New folder set for it.
+   Only the listing asked for last is drawn now. Found by the new
+   `tests/test_new_folder.py`, which now holds one listing back to prove it.
+7. **A run's options stayed open while it ran, and a change did nothing.**
+   An examiner ticked "Extract media from SQLite databases" after pressing
+   Start and took it that the run would now do it; options are read once,
+   at Start. While a run is going they are locked, with a line saying a
+   change applies to the next run. `tests/test_run_options_locked.py`.
+8. `tests/test_ui_sweep_panels.py` (new) presses every button and chip in
+   the panels and dialogs -- the case list, the extraction form and gallery,
+   Hashes, Similar, Signatures, Settings, the report, export and logo
+   dialogs, the file picker -- which the ribbon sweep never reached.
+
+Looked at and not a fault: a store check of a case closed meanwhile (jobs
+are never removed, so it finds its job); the finished checks kept in
+`STORE_SCANS` (a few hundred bytes a case).
+
+### New folder in the folder picker
+
+Choosing a results folder meant leaving the program to make one: the picker
+opened folders and chose one, and could not create one. It now has **New
+folder**: type a name inside the picker (not a browser pop-up, which would
+stop the page until answered), press Enter or Create, and the picker opens
+the new folder for **Use this folder**. `POST /api/browse/mkdir` makes one
+folder, by name, inside a folder that exists -- never a path, a chain of
+folders, or one already there -- and refuses names Windows will not take
+(`< > : " / \ | ? *`, control characters, a trailing period or space, CON,
+NUL, COM1 and the rest), since a case folder made on one machine is often
+copied to a Windows one. Not offered in the list of drives.
+`tests/test_new_folder.py` checks the route's refusals and does it in
+Chromium, from the results folder's Browse button to the field holding the
+new folder.
+
+### SQLite databases and plists are not graded
+
+With **also recover artifacts** on, a run keeps every SQLite database and
+binary property list it finds, and each one waited in the gallery, the
+category bar and Not yet reviewed for a category no examiner gives a
+database. They are now set aside as containers are (`media_gui.NOT_GRADED`,
+`_not_graded`): left out of the gallery, the bar and Not yet reviewed, said
+in the bar's note ("+ N not shown: containers, databases, plists"), brought
+back by **Show containers**, and kept in the manifest, the reports and the
+exports. A case already made is set aside the same way when it is opened.
+Zips and PDFs recovered with the same option are still shown for grading.
+`tests/test_records_not_graded.py` opens such a case through the route; with
+the change turned off it shows the database and the plist as files to grade.
+
 ## v2026.11.334 — Photos hidden as containers, and Python 3.11
 
 ### Photos were hidden as containers and left Uncategorized

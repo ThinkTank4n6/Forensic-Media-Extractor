@@ -71,7 +71,7 @@ def compute(rows, scheme=None, total_in_case: int = 0) -> dict:
 
     kinds = {"image": 0, "video": 0, "other": 0}
     categories, flags, names = {}, {}, {}
-    with_any_flag = known_hash = 0
+    with_any_flag = known_hash = set_aside = 0
 
     for row in rows:
         kinds[_kind_of(row)] += 1
@@ -104,6 +104,8 @@ def compute(rows, scheme=None, total_in_case: int = 0) -> dict:
 
         if row.get("hash_sets") or row.get("hash_set") or row.get("known"):
             known_hash += 1
+        if row.get("set_aside_ungraded"):
+            set_aside += 1
 
     total = len(rows)
 
@@ -138,8 +140,15 @@ def compute(rows, scheme=None, total_in_case: int = 0) -> dict:
         "with_any_flag": with_any_flag,
         "with_any_flag_percent": share(with_any_flag),
         "known_hash": known_hash,
+        # Of the Uncategorized, the files nobody grades: containers, and
+        # recovered databases and property lists (fme/review/setaside.py).
+        "set_aside": set_aside,
         "total_in_case": total_in_case,
     }
+
+
+SET_ASIDE_NOTE = ("of the Uncategorized, not for grading: containers other "
+                  "media came out of, and recovered databases and property lists")
 
 
 def donut(contents: dict, size: int = 420) -> bytes:
@@ -221,6 +230,8 @@ def as_rows(contents: dict) -> list:
         for entry in contents["categories"]:
             rows.append((f"    {entry['name']}", f"{entry['count']:,}",
                          f"{entry['percent']}%"))
+        if contents.get("set_aside"):
+            rows.append((f"        {SET_ASIDE_NOTE}", f"{contents['set_aside']:,}", ""))
 
     if contents.get("flags"):
         rows.append(("BY FLAG", "", ""))

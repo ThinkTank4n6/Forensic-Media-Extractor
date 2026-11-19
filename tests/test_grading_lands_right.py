@@ -121,6 +121,11 @@ if sync_playwright is not None:
                   sorted(shown) == sorted(b_files), len(shown))
             browser.close()
     server.shutdown()
+    # The page opened A and B again, which let go of the copies opened above
+    # (v2026.11.335): a window left on one is told the case was opened
+    # again. This test goes on as the page would, with the copies open now.
+    job_a = client.post("/api/cases/open", json={"out_dir": A}, headers=H).get_json()["job_id"]
+    job_b = client.post("/api/cases/open", json={"out_dir": B}, headers=H).get_json()["job_id"]
 
 print("\n2. a hash-set scan never replaces a grade made during it")
 case_a = gui._case_for(job_a)

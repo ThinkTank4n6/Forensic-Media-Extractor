@@ -66,8 +66,13 @@ client = gui.app.test_client()
 
 print("before a basemap is imported")
 none_yet = client.get("/api/basemap/style")
+# 200 with ok false since v2026.11.335: having no basemap is the usual state,
+# not a fault, and a 404 put a red line in the browser's console every time
+# the case map was opened.
 check("the style says there is none, and where to import one",
-      none_yet.status_code == 404 and "Settings" in none_yet.get_json()["error"])
+      none_yet.status_code == 200 and none_yet.get_json()["ok"] is False
+      and none_yet.get_json().get("missing") is True
+      and "Settings" in none_yet.get_json()["error"])
 
 rec = basemaps.import_basemap(os.path.join(HERE, "fixtures", "tiny.pmtiles"))
 basemaps.set_active(rec["name"])

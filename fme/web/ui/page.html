@@ -184,6 +184,10 @@
         <span class="hint">reads the evidence once more, end to end, before the run</span></label>
       <label class="inline"><input type="checkbox" id="find-members" checked> Read a RAID or LVM set with its other members from the same folder
         <span class="hint">found by what each file records about itself, never by its name; the report lists every file used</span></label>
+      <p class="hint" id="run-options-note" style="display:none; color:var(--warn);">
+        These were read when the run started. A change here applies to the next
+        run, not to this one: to add something, let this run finish (or cancel
+        it) and start again into a new results folder.</p>
       <label class="inline"><input type="checkbox" id="databases" checked> Extract media from SQLite databases</label>
       <label class="inline"><input type="checkbox" id="scan-inside"> Look inside compound files (documents, zips, EXIF thumbnails)</label>
       <label class="inline"><input type="checkbox" id="opt-artifacts" checked>
@@ -263,7 +267,7 @@
       <span class="chip" id="chip-nsrl"
             title="Leave out files whose hash is in a known-software list. A hit means the file is known, not that it is irrelevant — it is a lead about what to look at first, nothing more.">Hide known software</span>
       <span class="chip" id="chip-containers"
-            title="Show the archives, databases and caches that other media came out of. They are in the manifest and the reports either way.">Show containers</span>
+            title="Show the archives, databases and caches that other media came out of, and the SQLite databases and property lists a run recovered. None of them is graded. They are in the manifest and the reports either way.">Show containers</span>
       <span class="chip" data-filter="auto" title="Categorized by a hash set rather than by an examiner">Set by a hash set</span>
       <span class="chip" data-filter="needs-review" title="Everything a person has not looked at, including what a hash set categorized">Not yet reviewed</span>
       <label for="search" class="visually-hidden">Search the case</label>
@@ -977,7 +981,16 @@ the page as soon as they no longer match the filter.">
     <div class="row" style="padding:10px 16px 0;">
       <button class="secondary" id="browse-up" style="padding:6px 10px;">↑</button>
       <input type="text" id="browse-path" readonly>
+      <button class="secondary" id="browse-newdir" style="white-space:nowrap;"
+              title="Make a new folder inside the one shown, and open it">New folder</button>
     </div>
+    <div class="row" id="browse-newdir-row" style="padding:8px 16px 0; display:none;">
+      <label for="browse-newname" class="visually-hidden">Name of the new folder</label>
+      <input type="text" id="browse-newname" placeholder="Name of the new folder, e.g. DC26-0412">
+      <button id="browse-newdir-go" style="white-space:nowrap;">Create</button>
+      <button class="secondary" id="browse-newdir-cancel">Cancel</button>
+    </div>
+    <div class="err" id="browse-newdir-err" style="padding:0 16px;"></div>
     <div id="browse-roots" style="padding:8px 16px 0; display:flex; gap:6px;
          flex-wrap:wrap;"></div>
     <div class="modal-list" id="browse-list"></div>
