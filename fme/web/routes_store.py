@@ -290,7 +290,8 @@ def api_store_contribute():
     try:
         store = _store()
         result = store.contribute(job["out_dir"], name,
-                                  note=(data.get("note") or "").strip())
+                                  note=(data.get("note") or "").strip(),
+                                  descriptions=bool(data.get("descriptions")))
     except (OSError, ValueError, sqlite3.Error,
             remotestore.RemoteStoreError) as exc:
         # A shared store refuses a case another examiner owns (403); that

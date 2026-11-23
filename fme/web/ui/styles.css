@@ -92,6 +92,21 @@
   .fullbody img, .fullbody video { display: block; will-change: transform;
                                    user-select: none; }
   .fullbody.blurred img, .fullbody.blurred video { filter: blur(26px); }
+  /* Rotate, brightness and contrast (v2026.11.336): the turn is on the
+     wrapper that holds the picture and its masks, inside a box sized to the
+     turned picture, which is what zoom and drag move. Brightness and
+     contrast are a filter on that wrapper -- never on the picture, where the
+     review blur and the hidden screen put theirs. */
+  .rotbox { position: relative; display: inline-block; line-height: 0; flex: none; }
+  .viewadjust { display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+                padding: 4px 14px; font-size: 12px; color: var(--muted);
+                border-bottom: 1px solid var(--border); }
+  .viewadjust label { display: inline-flex; align-items: center; gap: 6px; }
+  .viewadjust input[type=range] { width: 130px; }
+  .viewadjust .n { min-width: 38px; font-variant-numeric: tabular-nums; }
+  .viewadjust #view-rotation:empty { display: none; }
+  .viewadjust .hint { margin-left: auto; }
+  .viewadjust.changed #view-reset { border-color: var(--accent); color: var(--accent); }
   .zoombar { display: inline-flex; align-items: center; gap: 4px;
              margin-left: auto; margin-right: 10px; }
   .zoombar button { padding: 2px 8px; font-size: 12px; }
@@ -427,6 +442,28 @@
   .card.blurred:hover .thumb::before, .card.blurred.shown .thumb::before {
     content: "shown";
   }
+  /* Pixelated instead (v2026.11.336). The hover and "shown" rules above
+     still lift it, being the more specific. */
+  body.blur-pixel .card.blurred .thumb img, body.blur-pixel .card.blurred .thumb video,
+  body.blur-pixel .preview.blurred img, body.blur-pixel .preview.blurred video,
+  body.blur-pixel .storygrid.blurred img {
+    filter: url(#fme-pixelate);
+  }
+  body.blur-pixel .fullbody.blurred img, body.blur-pixel .fullbody.blurred video {
+    filter: url(#fme-pixelate-lg);
+  }
+  body.blur-pixel .card.blurred:hover .thumb img, body.blur-pixel .card.blurred:hover .thumb video,
+  body.blur-pixel .card.blurred.shown .thumb img, body.blur-pixel .card.blurred.shown .thumb video,
+  body.blur-pixel .preview.blurred:hover img, body.blur-pixel .preview.blurred:hover video,
+  body.blur-pixel .preview.blurred.shown img, body.blur-pixel .preview.blurred.shown video {
+    filter: none;
+  }
+  body.blur-pixel .storygrid.blurred .storyframe:hover img { filter: none; }
+  body.blur-pixel .card.blurred .thumb::before { content: "pixelated"; }
+  body.blur-pixel .card.blurred:hover .thumb::before,
+  body.blur-pixel .card.blurred.shown .thumb::before { content: "shown"; }
+  .display-row.wellbeing { display: flex; flex-direction: column; gap: 8px;
+                           border-top: 1px solid var(--border); padding-top: 10px; }
   /* Striped: the category came from a hash set rather than from a person. */
   .card .catstrip.auto {
     background: repeating-linear-gradient(135deg, var(--cat), var(--cat) 5px,

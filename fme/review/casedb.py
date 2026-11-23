@@ -942,6 +942,24 @@ class CaseDB:
             self._log("note", sha256, f"{len(note)} character(s)")
             self._con.commit()
 
+    def set_note_if_empty(self, sha256: str, note: str) -> bool:
+        """Write a note only where the file has none -- a description the
+        hash store holds never replaces what the examiner wrote here."""
+        with self._guard():
+            row = self._con.execute(
+                "SELECT note FROM decisions WHERE sha256=?", (sha256,)).fetchone()
+            if row is not None and (row["note"] or "").strip():
+                return False
+            self._con.execute(
+                "INSERT INTO decisions (sha256, category, note, updated_at) "
+                "VALUES (?,?,?,?) "
+                "ON CONFLICT(sha256) DO UPDATE SET note=excluded.note, "
+                "updated_at=excluded.updated_at WHERE decisions.note=''",
+                (sha256, self.uncategorized, note, _now()))
+            self._log("note", sha256, f"{len(note)} character(s), from the hash store")
+            self._con.commit()
+            return True
+
     MAX_MASKS = 64
 
     @staticmethod

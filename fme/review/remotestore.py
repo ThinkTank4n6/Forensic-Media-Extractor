@@ -341,7 +341,8 @@ class RemoteHashStore:
         return {"added": added, "regraded": regraded}
 
     def contribute(self, out_dir: str, source_name: str,
-                   categories=None, note: str = "") -> dict:
+                   categories=None, note: str = "",
+                   descriptions: bool = False) -> dict:
         """Send this case's gradings to the shared store.
 
         The reading of the case happens here, on the machine that has it;
@@ -379,11 +380,17 @@ class RemoteHashStore:
                 # back to every case as "case X graded this".
                 by_sets += 1
                 continue
-            rows.append({"md5": record.get("md5", ""),
-                         "sha1": record.get("sha1", ""),
-                         "sha256": record.get("sha256", ""),
-                         "category": code,
-                         "label": names.get(code, str(code))})
+            row = {"md5": record.get("md5", ""),
+                   "sha1": record.get("sha1", ""),
+                   "sha256": record.get("sha256", ""),
+                   "category": code,
+                   "label": names.get(code, str(code))}
+            if descriptions:
+                # The examiner's note on the file, shared as its description
+                # (v2026.11.336) -- only when asked: sent without the key,
+                # the store keeps whatever description it already holds.
+                row["description"] = (decided or {}).get("note") or ""
+            rows.append(row)
             contributed += 1
 
         if not rows:

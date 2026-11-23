@@ -501,7 +501,7 @@ def match_origin(match: dict) -> str:
     return "session" if "matched_hash" in match else "store"
 
 
-def merge_matches(existing: dict, new: dict, replacing) -> dict:
+def merge_matches(existing: dict, new: dict, replacing, only=None) -> dict:
     """A case's saved matches, with those from `replacing` origins replaced
     by `new`, and every other match kept.
 
@@ -512,9 +512,17 @@ def merge_matches(existing: dict, new: dict, replacing) -> dict:
     report written after. Each check now replaces what it made before and
     nothing else, so running it again does not pile up copies either.
     """
+    # `only`: the files a check looked at, when it looked at some of the
+    # case -- a batch checked while a run is still going. Their matches from
+    # `replacing` are replaced; every other file's are kept, or each batch
+    # would erase the matches the batches before it made (v2026.11.336).
     replacing = set(replacing)
     merged = {}
     for digest, matches in (existing or {}).items():
+        if only is not None and digest not in only:
+            if matches:
+                merged[digest] = list(matches)
+            continue
         kept = [m for m in matches or [] if match_origin(m) not in replacing]
         if kept:
             merged[digest] = kept

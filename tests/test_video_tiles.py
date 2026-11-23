@@ -154,8 +154,11 @@ with gui.JOBS_LOCK:
     files = {f["rel_path"]: f for f in gui.JOBS[job]["files"]}
 avi = next(r for r in files if r.endswith(".avi"))
 mp4 = next(r for r in files if r.endswith(".mp4"))
-# The tile maker started when the case opened; wait for both posters.
-for _ in range(600):
+# The tile maker started when the case opened; wait for both posters. It
+# works below normal priority, so a machine kept busy gives way to it last:
+# with two cores and four other processes spinning it took 92 s. The waits
+# allow for that; what is checked is that it is done, not how soon.
+for _ in range(3000):
     if all(video_frames.existing(case, files[r]["sha256"]) for r in files):
         break
     time.sleep(0.1)
@@ -165,13 +168,15 @@ check("a video's poster is its first frame, made ahead", answer.status_code == 2
 shutil.rmtree(video_frames.frames_dir(case, files[mp4]["sha256"]), ignore_errors=True)
 started = time.perf_counter()
 answer = client.get(f"/api/poster?job={job}&file={mp4}")
+# "At once" with room for a loaded machine: the 404 is what shows nothing was
+# decoded; a decode in the request is seconds, not 1.5.
 check("one not made yet answers at once, and is not decoded in the request",
-      answer.status_code == 404 and time.perf_counter() - started < 0.5,
+      answer.status_code == 404 and time.perf_counter() - started < 1.5,
       f"{time.perf_counter() - started:.2f}s")
 cached = client.get(f"/api/frames?job={job}&file={mp4}&cached=1").get_json()
 check("asked ahead of the pointer, frames are never decoded in the request either",
       cached.get("pending") and not cached.get("frames"))
-for _ in range(300):
+for _ in range(3000):
     if video_frames.existing(case, files[mp4]["sha256"]):
         break
     time.sleep(0.1)
@@ -184,7 +189,7 @@ before = open(os.path.join(case, avi), "rb").read()
 started = time.perf_counter()
 made = client.post("/api/playable", json={"job": job, "file": avi}, headers=H).get_json()
 check("the request answers at once, and the copy is made beside it",
-      made.get("pending") and time.perf_counter() - started < 0.5,
+      made.get("pending") and time.perf_counter() - started < 1.5,
       f"{time.perf_counter() - started:.2f}s")
 for _ in range(600):
     if not made.get("pending"):
@@ -203,6 +208,12 @@ check("and the copy is in no list of what was recovered",
       not any("_playable" in p for p in listed))
 again = client.post("/api/playable", json={"job": job, "file": avi}, headers=H).get_json()
 check("asked again, the same copy", again.get("ok") and again.get("how") == "kept")
+# The thread lets go in its own last step, a moment after the copy is ready:
+# read at once, that moment failed the check under load.
+for _ in range(50):
+    if not gpu_video._making and not gui.PLAYABLE:
+        break
+    time.sleep(0.1)
 check("and nothing is left held for it",
       not gpu_video._making and not gui.PLAYABLE, (gpu_video._making, gui.PLAYABLE))
 

@@ -597,6 +597,7 @@ $("btn-start").addEventListener("click", async () => {
     leaveReview();
     openedCase = null;
     jobId = d.job_id;
+    hideIfAsked();
     running = true;
     lockRunOptions(true);
     $("job-badge").style.display = "inline-block";
@@ -620,6 +621,7 @@ $("btn-cancel").addEventListener("click", async () => {
   }
 });
 
+let liveStoreFor = null, storeSetSeen = 0;
 async function poll() {
   try {
     // Ask for the files after the ones already here, so the list grows to
@@ -639,7 +641,24 @@ async function poll() {
       c.embedded ? `${count(c.embedded)} embedded` : "",
       c.deleted ? `${count(c.deleted)} deleted` : "",
       c.errors ? `${count(c.errors)} unreadable` : "",
+      // Checked against the hash store as the files arrive (v2026.11.336).
+      (d.live_store && d.live_store.checked)
+        ? `${count(d.live_store.matched)} of ${count(d.live_store.checked)} known to ` +
+          `the hash store, ${count(d.live_store.categorized)} categorized from it`
+        : "",
     ].filter(Boolean).join(" · ");
+    // Categories the server set from the store during the run, brought to
+    // the page as they are set: the tiles came in Uncategorized until the
+    // run had finished, though their gradings were known all along.
+    const setByStore = (d.live_store && d.live_store.categorized) || 0;
+    if (setByStore !== storeSetSeen && jobId === liveStoreFor) {
+      storeSetSeen = setByStore;
+      if (setByStore) loadCase();
+    } else if (jobId !== liveStoreFor) {
+      liveStoreFor = jobId;
+      storeSetSeen = setByStore;
+      if (setByStore) loadCase();
+    }
 
     if (d.phase === "carve" && d.total) {
       $("bar").style.width = pct + "%";
@@ -2978,24 +2997,126 @@ let zoomDragging = false, zoomFrom = null;
 function zoomApply() {
   const picture = $("full-body").querySelector("img, video");
   if (!picture) return;
-  // The transform goes on the wrapper, so the masks drawn over the
-  // picture move and scale with it.
-  const moved = picture.closest(".maskwrap") || picture;
+  // The transform goes on the box around the wrapper, so the masks drawn
+  // over the picture move and scale with it -- and, turned, so zoom and
+  // drag act on the turned picture as they do on an upright one.
+  const moved = picture.closest(".rotbox") || picture.closest(".maskwrap") || picture;
   if (!zoomScale) {
     moved.style.transform = "";
-    picture.style.maxWidth = "92vw";
-    picture.style.maxHeight = "74vh";
+    moved.style.position = moved.style.left = moved.style.top = "";
+    // Fitted to the frame as it is, inside its padding -- measured, not
+    // 74vh: the dialog holds the frame shorter than that, and a tall
+    // picture ran under its lower edge. A picture turned a quarter is as
+    // tall as it was wide, so its width is held to the frame's height.
+    const frame = $("full-body");
+    const roomW = frame.clientWidth - 24, roomH = frame.clientHeight - 16;
+    const wide = roomW > 0 ? `${roomW}px` : "calc(92vw - 24px)";
+    const tall = roomH > 0 ? `${roomH}px` : "calc(74vh - 16px)";
+    const quarter = viewRotate % 180 !== 0;
+    picture.style.maxWidth = quarter ? tall : wide;
+    picture.style.maxHeight = quarter ? wide : tall;
     picture.style.cursor = "zoom-in";
     $("zoom-level").textContent = "fit";
+    viewAdjustApply();
     return;
   }
   picture.style.maxWidth = "none";
   picture.style.maxHeight = "none";
+  // Placed at the frame's corner, which is what zoomX and zoomY are
+  // measured from. Left in the frame's centered layout, the translation
+  // was added to wherever centering put the box at its zoomed size, and
+  // every zoom moved the picture off what the examiner was looking at --
+  // 290 px to the right on a wide photo (v2026.11.336).
+  moved.style.position = "absolute";
+  moved.style.left = moved.style.top = "0";
   moved.style.transformOrigin = "0 0";
   moved.style.transform =
     `translate(${zoomX}px, ${zoomY}px) scale(${zoomScale})`;
   picture.style.cursor = zoomDragging ? "grabbing" : "grab";
   $("zoom-level").textContent = `${Math.round(zoomScale * 100)}%`;
+  viewAdjustApply();
+}
+
+// ---- rotate, brightness and contrast (v2026.11.336) ----------------------
+// A way of looking, like zoom: a sideways photo turned upright, a dark one
+// lifted. Nothing is written -- not to the file, the case, an export or a
+// report -- and the picture's own hash and pixels are what every result
+// still rests on. The turn is per picture (stepping on starts upright, the
+// way the next file is); brightness and contrast stay on while stepping
+// through, since dark pictures come in runs, until Reset view.
+let viewRotate = 0;                         // degrees, a multiple of 90
+let viewBright = 100, viewContrast = 100;   // percent
+
+function viewAdjustApply() {
+  const body = $("full-body");
+  const wrap = body.querySelector(".maskwrap");
+  const box = body.querySelector(".rotbox");
+  const picture = wrap && wrap.querySelector("img, video");
+  const lifted = viewBright !== 100 || viewContrast !== 100;
+  if (wrap) {
+    // On the wrapper, never the picture: the review blur and the hidden
+    // screen are a filter on the picture, and one set there would replace
+    // theirs and show a blurred picture plainly.
+    wrap.style.filter = lifted ? `brightness(${viewBright}%) contrast(${viewContrast}%)` : "";
+  }
+  if (box && wrap && picture) {
+    if (!viewRotate) {
+      box.style.width = box.style.height = "";
+      wrap.style.position = wrap.style.left = wrap.style.top = "";
+      wrap.style.transform = "";
+    } else {
+      // The box takes the turned picture's size, and the wrapper turns
+      // about its own middle inside it.
+      const w = picture.offsetWidth, h = picture.offsetHeight;
+      const quarter = viewRotate % 180 !== 0;
+      const boxW = quarter ? h : w, boxH = quarter ? w : h;
+      box.style.width = `${boxW}px`;
+      box.style.height = `${boxH}px`;
+      wrap.style.position = "absolute";
+      wrap.style.left = `${(boxW - w) / 2}px`;
+      wrap.style.top = `${(boxH - h) / 2}px`;
+      wrap.style.transformOrigin = "50% 50%";
+      wrap.style.transform = `rotate(${viewRotate}deg)`;
+    }
+  }
+  $("view-bright").value = viewBright;
+  $("view-contrast").value = viewContrast;
+  $("view-bright-n").textContent = `${viewBright}%`;
+  $("view-contrast-n").textContent = `${viewContrast}%`;
+  $("view-rotation").textContent = viewRotate ? `turned ${viewRotate}°` : "";
+  const changed = lifted || !!viewRotate;
+  $("view-reset").disabled = !changed;
+  $("view-adjust").classList.toggle("changed", changed);
+  // A mask is drawn on the upright picture: dragged over a turned one, the
+  // box would land somewhere else. Masks already drawn turn with it.
+  $("mask-draw").disabled = !!viewRotate;
+  $("mask-draw").title = viewRotate
+    ? "Turn the picture upright to draw a mask (Reset view)"
+    : "Cover part of the picture: drag a box over it. Kept with the case and " +
+      "shown wherever the picture is; never applied to the file, an export or a report (M)";
+  if (viewRotate && masking) setMasking(false);
+}
+
+function viewTurn(by) {
+  viewRotate = ((viewRotate + by) % 360 + 360) % 360;
+  zoomReset();                     // fitted again, the turned way
+}
+
+function viewReset() {
+  viewRotate = 0;
+  viewBright = viewContrast = 100;
+  zoomReset();
+}
+
+$("view-rotate-left").addEventListener("click", () => viewTurn(-90));
+$("view-rotate-right").addEventListener("click", () => viewTurn(90));
+$("view-reset").addEventListener("click", viewReset);
+for (const [id, set] of [["view-bright", v => { viewBright = v; }],
+                         ["view-contrast", v => { viewContrast = v; }]]) {
+  $(id).addEventListener("input", () => { set(parseInt($(id).value, 10) || 100); viewAdjustApply(); });
+  // Let go of the slider once it is set: while it has the focus, keys go
+  // to it, and the next grading key would do nothing.
+  $(id).addEventListener("change", () => $(id).blur());
 }
 
 function zoomTo(scale, atX, atY) {
@@ -3004,8 +3125,7 @@ function zoomTo(scale, atX, atY) {
   const box = picture.getBoundingClientRect();
   // Keep whatever is under the pointer under the pointer: zooming that
   // moves the thing being looked at is zooming the examiner has to undo.
-  const wasScale = zoomScale || (box.width / (picture.naturalWidth ||
-                                              picture.videoWidth || box.width));
+  const wasScale = zoomScale || fittedScale(picture);
   const pointX = (atX === undefined ? box.left + box.width / 2 : atX) - box.left;
   const pointY = (atY === undefined ? box.top + box.height / 2 : atY) - box.top;
   const next = Math.min(16, Math.max(0.05, scale));
@@ -3017,12 +3137,19 @@ function zoomTo(scale, atX, atY) {
   zoomApply();
 }
 
+// The scale a fitted picture is shown at: its laid-out width over its own.
+// Not its width on screen, which for a picture turned a quarter is its
+// height -- zoom in then went out, and the picture slid off the frame.
+function fittedScale(picture) {
+  const own = picture.naturalWidth || picture.videoWidth || picture.offsetWidth || 1;
+  return (picture.offsetWidth || own) / own;
+}
+
 function zoomStep(by) {
   const picture = $("full-body").querySelector("img, video");
   if (!picture) return;
   const box = picture.getBoundingClientRect();
-  const current = zoomScale ||
-    (box.width / (picture.naturalWidth || picture.videoWidth || box.width));
+  const current = zoomScale || fittedScale(picture);
   zoomTo(current * by, box.left + box.width / 2, box.top + box.height / 2);
 }
 
@@ -3035,8 +3162,15 @@ function viewFullSize(file) {
     ? `<video src="${source}" controls autoplay muted></video>`
     : `<img src="${source}" alt="">`;
   releaseMedia($("full-body"));
-  $("full-body").innerHTML = `<div class="maskwrap">${media}<div class="masks"></div></div>` +
+  $("full-body").innerHTML =
+    `<div class="rotbox"><div class="maskwrap">${media}<div class="masks"></div></div></div>` +
     (file.category === "video" ? `<p class="hint playnote" style="margin:4px 8px;"></p>` : "");
+  viewRotate = 0;
+  // Turned, the box is sized from the picture, whose size is known once
+  // it has loaded.
+  const shown = $("full-body").querySelector("img, video");
+  shown.addEventListener(file.category === "video" ? "loadedmetadata" : "load",
+                         () => (zoomScale ? viewAdjustApply() : zoomApply()));
   if (file.category === "video") {
     playableFallback($("full-body").querySelector("video"), file.rel_path,
                      $("full-body").querySelector(".playnote"));
@@ -3107,8 +3241,7 @@ $("full-body").addEventListener("wheel", e => {
   if (!picture) return;
   e.preventDefault();
   const box = picture.getBoundingClientRect();
-  const current = zoomScale ||
-    (box.width / (picture.naturalWidth || picture.videoWidth || box.width));
+  const current = zoomScale || fittedScale(picture);
   zoomTo(current * (e.deltaY < 0 ? 1.15 : 1 / 1.15), e.clientX, e.clientY);
 }, {passive: false});
 
@@ -3741,6 +3874,7 @@ async function openCase(outDir) {
     $("export-box").style.display = "block";
     $("vic-box").style.display = "block";
     enterReview((st.summary && st.summary.image) || outDir);
+    hideIfAsked();
     await loadCase();
     render();
     // Straight to the case itself, which is what opening one is for.
@@ -4020,6 +4154,9 @@ function ribbonDefinition() {
         {label: "Blurred categories", glyph: "☷", go: openDisplayOptions,
          tip: "Choose which of this case's categories the blur covers when it " +
               "is set to the categories ticked."},
+        {label: "Wellbeing", glyph: "♡", go: openDisplayOptions,
+         tip: "Pixelate instead of blur, hide everything whenever a case " +
+              "opens, and a reminder to take a break."},
         {label: "Hide the screen", glyph: "⬛",
          tip: "Blurs every picture and video on the page and lifts for " +
               "nothing, for when somebody walks up to the desk. Ctrl-B " +
@@ -5128,6 +5265,13 @@ document.addEventListener("keydown", e => {
   if (viewerOpen && (e.key === "m" || e.key === "M") && !grading(e.key)) {
     e.preventDefault();
     setMasking(!masking);
+    return;
+  }
+  // R turns the view right, Shift+R left -- unless R grades or flags in
+  // this case, as M is left to the grading when it does.
+  if (viewerOpen && (e.key === "r" || e.key === "R") && !grading(e.key)) {
+    e.preventDefault();
+    viewTurn(e.key === "R" ? -90 : 90);
     return;
   }
 
@@ -6333,11 +6477,15 @@ $("store-import-go").addEventListener("click", async () => {
 });
 
 // Press the store check by itself after a run, if there is a store to ask.
+let storeCheckAuto = false;
 async function autoStoreCheck() {
   try {
     const where = await api("/api/store");
     if (where.none_yet || !where.total) return;      // no store set up
   } catch (e) { return; }                            // unreachable: say nothing
+  // The server checks a run against the store itself when it ends; this
+  // shows that check, rather than starting a second over the same files.
+  storeCheckAuto = true;
   if (!$("store-scan").disabled) $("store-scan").click();
   toast("Checking this run against the hash store; categories it sets are "
         + "marked as set by a hash set.");
@@ -6367,9 +6515,13 @@ $("store-scan").addEventListener("click", async () => {
     // files is minutes against a shared store, and the button saying
     // "Checking…" until a request came back was all there was to tell it
     // had ended (v2026.11.334).
+    // Pressed by the examiner, it checks again; after a run, it shows the
+    // check the server made when the run ended.
+    const again = !storeCheckAuto;
+    storeCheckAuto = false;
     let state = await api("/api/store/scan", {
       method: "POST", headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({job: forJob, background: true})});
+      body: JSON.stringify({job: forJob, background: true, again})});
     while (state.state === "running") {
       await new Promise(r => setTimeout(r, 1000));
       state = await api(`/api/store/scan?job=${encodeURIComponent(forJob)}`);
@@ -6448,7 +6600,8 @@ $("store-contribute").addEventListener("click", async () => {
   try {
     const d = await api("/api/store/contribute", {
       method: "POST", headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({job: jobId, source: name})});
+      body: JSON.stringify({job: jobId, source: name,
+                            descriptions: $("store-descriptions").checked})});
     renderStore(d);
     // A local store answers {hashes, skipped_uncategorized}; a shared store
     // answered {stored} before it was brought into line, and a server not
@@ -7157,6 +7310,92 @@ applyGray();
 $("gray-on").addEventListener("change", () => {
   remember("gray", grayOn() ? "1" : "0");
   applyGray();
+});
+
+// ---- Wellbeing, after Griffeye's list (v2026.11.336) ----------------------
+// Pixelated instead of blurred; everything hidden whenever a case opens; and
+// a reminder to stop. All kept on this machine and none of them touches a
+// file, a grade or a report.
+function applyBlurStyle() {
+  document.body.classList.toggle("blur-pixel", $("blur-style").value === "pixel");
+}
+$("blur-style").value = recall("blurStyle", "blur") === "pixel" ? "pixel" : "blur";
+applyBlurStyle();
+$("blur-style").addEventListener("change", () => {
+  remember("blurStyle", $("blur-style").value);
+  applyBlurStyle();
+});
+
+function hideOnOpen() { return $("hide-on-open").checked; }
+// Called wherever a case's pictures are about to be shown: the program
+// opening, a case opened, a run started.
+function hideIfAsked() { if (hideOnOpen()) hideScreen(true); }
+$("hide-on-open").checked = recall("hideOnOpen", "0") === "1";
+$("hide-on-open").addEventListener("change", () => {
+  remember("hideOnOpen", hideOnOpen() ? "1" : "0");
+});
+hideIfAsked();
+
+// The break reminder counts time spent working, not time the page is open:
+// a gap of BREAK_GAP with no key, click or scroll is a break already taken,
+// and the count starts again with the next thing done.
+const BREAK_GAP = 5 * 60 * 1000;
+let breakEvery = parseFloat(recall("breakEvery", "60"));
+if (!(breakEvery >= 0)) breakEvery = 60;
+let workSince = 0, lastActive = 0, breakSnoozed = 0;
+(function showBreakChoice() {
+  const sel = $("break-every");
+  const options = () => Array.from(sel.options || []);
+  if (!options().some(o => parseFloat(o.value) === breakEvery)) {
+    // A value set elsewhere (a test, an older choice): shown as it is.
+    const extra = document.createElement("option");
+    extra.value = String(breakEvery);
+    extra.textContent = `${breakEvery} minutes`;
+    sel.appendChild(extra);
+  }
+  const chosen = options().find(o => parseFloat(o.value) === breakEvery);
+  sel.value = chosen ? chosen.value : String(breakEvery);
+})();
+$("break-every").addEventListener("change", () => {
+  breakEvery = parseFloat($("break-every").value) || 0;
+  remember("breakEvery", String(breakEvery));
+  workSince = lastActive = Date.now();
+  breakSnoozed = 0;
+});
+function noteActivity() {
+  const now = Date.now();
+  if (!workSince || now - lastActive > BREAK_GAP) workSince = now;
+  lastActive = now;
+}
+["keydown", "mousedown", "wheel", "touchstart"].forEach(kind =>
+  document.addEventListener(kind, noteActivity, {capture: true, passive: true}));
+function breakDue(now) {
+  if (!breakEvery || !workSince || $("break-modal").classList.contains("open"))
+    return false;
+  if (now - lastActive > BREAK_GAP) return false;       // away already
+  if (breakSnoozed && now < breakSnoozed) return false;
+  return now - workSince >= breakEvery * 60 * 1000;
+}
+function checkBreak() {
+  const now = Date.now();
+  if (!breakDue(now)) return;
+  const minutes = Math.round((now - workSince) / 60000);
+  $("break-text").textContent = minutes >= 1
+    ? `You have been working for ${minutes} minute${minutes === 1 ? "" : "s"} without a break.`
+    : "You have been working for a while without a break.";
+  $("break-modal").classList.add("open");
+}
+setInterval(checkBreak, 1000);
+$("break-take").addEventListener("click", () => {
+  $("break-modal").classList.remove("open");
+  hideScreen(true);
+  // The count starts again with whatever is done after the break.
+  workSince = 0;
+  breakSnoozed = 0;
+});
+$("break-snooze").addEventListener("click", () => {
+  $("break-modal").classList.remove("open");
+  breakSnoozed = Date.now() + 10 * 60 * 1000;
 });
 
 let fullFile = null, masking = false, maskStart = null, maskBox = null;

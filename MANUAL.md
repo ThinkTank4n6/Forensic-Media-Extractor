@@ -264,6 +264,35 @@ walking file systems — 43,570 recovered
 A phase and a percentage say what the program is doing; these say whether
 it is finding anything, which is the question during a long run.
 
+## The hash store grades a run while it is running
+
+With a hash store set up, a run is checked against it **as it goes**: the
+files found so far are looked up in batches, and anything the store knows is
+graded as it arrives — only a file nobody has graded, and marked as the
+store's, not yours. When the run ends the whole case is checked once more,
+by the program itself, whether or not a page is open. Under the progress
+bar: "N of M known to the hash store, K categorized from it".
+
+A note you write on a graded file goes into the store with it when you
+contribute, as that file's description. The next case to meet the file
+starts with your note as its note, followed by which case wrote it; a note
+already written in that case is never replaced.
+
+## A Project VIC export from Physical Analyzer
+
+Physical Analyzer's **Project VIC** export writes a JSON file and, beside
+it, a folder of the media. Load the **JSON** on the extraction screen as you
+would an image and press **Start**: it becomes a case like any other, with
+the case number the export carries. Every file is copied in and checked
+against the hashes in its record; **the category the export gives is
+applied** to files nobody has graded, marked as the export's. A file whose
+bytes do not match its record is copied in but not graded from it, and one
+missing from the folder is counted in the summary. Keep the JSON and its
+folder together as Physical Analyzer wrote them.
+
+A Project VIC file with no media beside it — a national hash set — is a hash
+set, not a case: load it on the Hashes tab.
+
 ## If the hash store stops matching things
 
 A store that has been damaged does not announce it. Lookups quietly stop
@@ -996,6 +1025,19 @@ around, `+` and `−` to step, `0` to fit the window, `1` for actual size, or
 double-click to toggle between fit and actual. Deciding what a picture is
 often turns on a detail a few pixels wide on a tile.
 
+**Full size turns, brightens and sharpens the contrast.** ⟲ and ⟳ (or **R**
+and **Shift+R**) turn the picture a quarter at a time, for a photo taken
+sideways; the **Brightness** and **Contrast** sliders under the header lift a
+dark picture or flatten a glaring one, and **Reset view** puts all three
+back. These are a way of looking, like zoom: the file, the case, the exports
+and the reports never change, and the picture's hash is the same before and
+after. The turn is per picture -- the next file opens upright -- while
+brightness and contrast stay on as you step through, until Reset view. The
+review blur and Ctrl-B still cover a picture however it is lifted. A mask is
+drawn on an upright picture; turned, the masks already drawn turn with it,
+and Mask waits until Reset view. If R grades or flags in your case, the keys
+are left to it and the buttons do the turning.
+
 **Ctrl-B hides the screen.** Every picture and video on the page is
 blurred, whatever its category and whatever you are looking at — the
 gallery, the details pane, the picture open full size. A banner says so.
@@ -1013,6 +1055,20 @@ sound carries further than a screen does.
 
 It hides the pictures **from the room**. It changes no file, nothing in a
 report, and no decision already recorded.
+
+**Looking after yourself** (Display options, or **Wellbeing** on the ribbon's
+Blur group). Three settings, kept on this machine:
+
+- **How the review blur looks** — blurred, or pixelated into blocks of one
+  colour, which keep less of a picture's shapes. Hover and B lift either.
+- **Hide everything when a case opens** — the program opens, and every case
+  and run opens, with the screen hidden as Ctrl-B hides it, until you press
+  Ctrl-B.
+- **Remind me to take a break** — after an hour of work by default; 30, 45,
+  90 minutes, 2 hours, or never. Work is counted from what you do: five
+  minutes without a key, click or scroll counts as a break already taken.
+  **Take a break** hides the screen until you come back and press Ctrl-B;
+  **Remind me in 10 minutes** puts it off.
 
 ### Finding a picture after it was edited
 

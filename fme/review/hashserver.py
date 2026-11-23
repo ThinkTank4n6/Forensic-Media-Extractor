@@ -835,7 +835,14 @@ def build_app(store_path: str, accounts_path: str = "",
         # and free text. None of it was sent by the caller, so none of it
         # goes back: only the grading fields the client acts on.
         for match in matches:
-            match["record"] = hashsets.vic_shareable(match.get("record"))
+            stored = match.get("record") or {}
+            match["record"] = hashsets.vic_shareable(stored)
+            # A case's description is different: an examiner wrote it, into
+            # a contribution, for the next examiner to read (v2026.11.336).
+            # An imported set's free text stays private as before.
+            if match.get("kind") == "case" and isinstance(stored, dict) \
+                    and stored.get("Description"):
+                match["record"]["Description"] = str(stored["Description"])
         accounts.record(person["name"], "lookup",
                         f"{len(digests)} digest(s), {len(matches)} match(es)",
                         request.remote_addr or "", version=_client_version())

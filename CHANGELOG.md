@@ -4,6 +4,145 @@ The release number is in `VERSION` and is reported by both GUIs, the console
 banner, and the Project VIC and LAVA exports, so a report can be traced back
 to the build that produced it.
 
+## v2026.11.336 — Hash store categories during a run, Physical Analyzer's Project VIC export as a case, wellbeing, and rotate/brightness in the viewer
+
+### The hash store categorizes a run as it goes, and when it ends
+
+Reported: a phone extracted with Graykey was graded in full and contributed
+to the store; the same phone's media, exported from Physical Analyzer and
+run again, came in **Uncategorized -- 129,230 of them**, though the store was
+set up and the case was being run against it. The store was asked only once
+a run had finished, and only by the page: `autoStoreCheck` pressed the
+store-check button after the run ended, which read `manifest.json` -- written
+at the very end. Nothing during the run; and nothing at all if the page was
+closed, reloaded or on another case when the run ended.
+
+- **Checked during the run** (`_LiveStoreCheck`): new files are looked up in
+  batches of 5,000, or every 15 seconds, on a thread of their own, as the
+  gallery fills. Each batch is graded as it is checked, through the same
+  rules as before -- only a file nobody has graded, the most severe category
+  where sets agree, marked as the set's, not the examiner's -- and a later
+  batch keeps the matches an earlier one made (`merge_matches(..., only=)`).
+- **Checked again by the server when the run ends**, whole, whether or not a
+  page is open. The page's own check joins it rather than starting another.
+- The run's status line says how far it has got: "N of M known to the hash
+  store, K categorized from it", and the gallery is reloaded as K grows.
+- Asking whether a store is set up never makes an empty one
+  (`_store_if_set_up`).
+
+`tests/test_store_during_run.py`: case A graded and contributed; case B (the
+same pictures, renamed, and four new) run with no page -- every known one has
+A's category, set by a hash set; the new ones are left; a hand grade made
+before the check stands; batches graded mid-run keep each other's matches.
+
+### Physical Analyzer's Project VIC export opens as a new case
+
+Asked: after processing a phone, Physical Analyzer exports every picture and
+video as a Project VIC JSON with a folder of the files beside it. Does FME
+take it as a new case? It did not: the extraction screen refused a JSON, and
+the Hashes tab's "Import its media" copied the files into a folder no case
+list showed, applied none of the export's categories, and could not be
+canceled.
+
+- **Load Image / Folder takes the JSON**: the screen says "Project VIC export
+  (Cellebrite Physical Analyzer)", how many records it holds, and that
+  carving and file-system options do not apply. **Start** runs it as a case
+  like any other -- listed in Cases, a case.db, its case number taken from
+  the export, the gallery filling as it goes, the hash store checked during
+  and after, and Cancel working.
+- Each file is copied in and verified against every hash its record gives.
+  **The category the export gives is applied** to files nobody has graded,
+  marked as the export's ("hash set: Cellebrite Physical Analyzer export"),
+  mapped onto the case's scheme. A file whose bytes do not match its record
+  is not graded from it; a file missing from the folder is counted.
+- A hash set with no media beside it -- a national Project VIC download -- is
+  refused there, and told to use the Hashes tab.
+- The Hashes tab's "Import its media" is now the same: a listed,
+  categorized, cancelable case.
+
+`tests/test_pa_vic_case.py`.
+
+### Wellbeing, after Griffeye's list
+
+Measured against Magnet Griffeye's "Prioritizing wellbeing": FME already had
+the review blur, Ctrl-B to hide the screen, grayscale, masks, muted video,
+storyboards in place of playing a clip, and pre-categorization from hash
+sets and the store. Added:
+
+- **Pixelate** as well as blur (Display options → "How the review blur
+  looks"). Hover and B still lift it.
+- **Hide everything when a case opens**: the program opens, and every case
+  opens, with the screen hidden until Ctrl-B.
+- **A reminder to take a break**, after 1 hour of work by default (30, 45,
+  90 minutes, 2 hours, or never). Counted from activity: five minutes with
+  no key, click or scroll is a break already taken. "Take a break" hides the
+  screen; "Remind me in 10 minutes" puts it off.
+- **Descriptions shared through the hash store**, as Griffeye's GID does: a
+  note written on a graded file is contributed with it, and a later case
+  that meets the file starts with that note, saying which case wrote it. A
+  note already written in the case is never replaced; contributed again, the
+  store holds the note as it is now. The shared server returns a case's
+  description and still never an imported Project VIC record's free text.
+
+Griffeye's CSA classifier is not here: it is a trained model of their own,
+and no model in FME has been trained or validated for that.
+
+`tests/test_wellbeing.py` (Chromium) and `tests/test_store_descriptions.py`.
+
+### Rotate, brightness and contrast in the viewer
+
+Asked for by the examiner: in the full-size viewer a double-click opens,
+**⟲ ⟳** turn the picture a quarter (keys **R** and **Shift+R**, unless R
+grades or flags in the case), and **Brightness** and **Contrast** sliders
+lift a dark picture; **Reset view** puts it back. A way of looking, like
+zoom: nothing is written to the file, the case, an export or a report, and
+the viewer says so. The turn is per picture -- the next file starts
+upright -- and brightness and contrast stay on while stepping through, since
+dark pictures come in runs. Videos turn and lift the same way.
+
+- The turn is on the wrapper that holds the picture and its masks, inside a
+  box sized to the turned picture, which is what zoom and drag move; masks
+  already drawn turn with it, and drawing a new one waits until the picture
+  is upright (a box dragged over a turned picture would land elsewhere).
+- Brightness and contrast are a filter on that wrapper, never on the
+  picture: the review blur and the hidden screen are filters on the picture,
+  and one set there would have shown a blurred picture plainly.
+- A slider gives the keyboard back when it is let go, so the next grading key
+  grades.
+
+Found while building it, and fixed:
+
+- **Zoom moved the picture off what was being looked at.** The zoomed
+  picture was translated from wherever the frame's centering put it, not
+  from the frame's corner that the arithmetic measured from: zooming in on a
+  wide photo moved its middle 290 px to the right. No test zoomed. It is now
+  placed at the frame's corner while zoomed, and the middle stays the middle.
+- **Fit was 74% of the window, not the frame.** The dialog holds the frame
+  shorter than that, so a tall picture ran under the frame's lower edge. The
+  fit is measured from the frame, inside its padding.
+
+- **A tile could stay blank: two races in the tile maker**, found because
+  `tests/test_video_tiles.py` failed under load in this release's full run.
+  (1) A worker that found nothing left released the queue's lock and counted
+  itself out afterwards; a tile asked for in between was queued while the
+  worker still counted as running, so no other was started, and it left
+  without it. It is counted out in the same hold of the lock now. (2) A
+  tile the sweep had taken once was refused if asked for again while the
+  sweep still ran -- and on a large case the sweep runs for hours -- so a
+  tile whose making failed, or whose files were removed, stayed blank until
+  it ended. A tile asked for because it is missing is queued again unless a
+  worker is making it that moment. `tests/test_prefill_wakeup.py` makes each
+  moment long on purpose; on the .335 tile maker the tile stays blank.
+  `test_video_tiles` also allows for the tile maker's below-normal priority:
+  with two cores and four other processes spinning it took 92 s, and the
+  check is that it is done, not how soon.
+
+`tests/test_view_adjust.py` does all of it in Chromium on a wide photo --
+turned, keys, zoom about the middle upright and turned, the blur kept,
+the keyboard given back, the next file upright and still lifted, Reset view,
+masks -- and checks that no request that writes is sent and the files'
+bytes are unchanged. The panel sweep now presses the viewer's buttons too.
+
 ## v2026.11.335 — Hold the page, databases and plists not graded, New folder, a code review
 
 ### Hold the page held nothing when the filter's files fit on one page

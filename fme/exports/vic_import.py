@@ -217,9 +217,63 @@ def _category_of(entry: dict):
 # --------------------------------------------------------------------------
 # 1. Import a VICS export together with its media
 # --------------------------------------------------------------------------
+def count_records(path: str) -> int:
+    """How many media records the file holds, without decoding any.
+
+    Counted by the "MediaID" key, which every VICS record carries once; the
+    count is for a progress bar, so a key repeated inside free text costs
+    nothing worse than a bar that ends a little short.
+    """
+    total, tail = 0, ""
+    with open(path, "r", encoding="utf-8-sig", errors="replace") as fh:
+        while True:
+            data = fh.read(CHUNK)
+            if not data:
+                return total
+            buf = tail + data
+            total += buf.count('"MediaID"')
+            # A key cut by the chunk edge is counted in the next window; one
+            # wholly inside the kept tail was counted already, so the tail is
+            # shorter than the key.
+            tail = buf[-(len('"MediaID"') - 1):]
+
+
+def media_alongside(path: str, sample: int = 25) -> dict:
+    """Is this an export with its media beside it, or a bare hash set?
+
+    Physical Analyzer's Project VIC export writes the JSON and, next to it, a
+    folder holding one file per record; a national set is the JSON alone.
+    The first few records are looked for: an export finds its files, a set
+    has no RelativeFilePath to find.
+    """
+    base = os.path.dirname(os.path.abspath(path))
+    looked = found = 0
+    try:
+        for entry in stream_media(path):
+            rel = (entry.get("RelativeFilePath") or "").replace("\\", os.sep)
+            looked += 1
+            if rel:
+                full = os.path.abspath(os.path.join(base, rel))
+                if _inside(base, full) and os.path.isfile(full):
+                    found += 1
+            if looked >= sample:
+                break
+    except ValueError:
+        pass
+    return {"looked": looked, "found": found}
+
+
 def import_media(vic_path: str, out_dir: str, *, files_root: str = "",
-                 verify: bool = True, signatures=None) -> dict:
-    """Copy every referenced file into a media_core-style output tree."""
+                 verify: bool = True, signatures=None, progress_cb=None,
+                 cancel_cb=None) -> dict:
+    """Copy every referenced file into a media_core-style output tree.
+
+    `progress_cb(done, total, recovered, phase)` and `cancel_cb()` are the
+    same as run_extraction's, so a VICS export can be run as a case. The
+    answer carries ``categories`` -- {sha256: the category the export gave}
+    for every file whose bytes matched its record -- for the caller to apply
+    to the case; a file whose bytes did not match is not in it.
+    """
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     from fme.engines import media_core
 
@@ -230,9 +284,18 @@ def import_media(vic_path: str, out_dir: str, *, files_root: str = "",
     stats = {"records": 0, "found": 0, "missing": 0, "hash_mismatch": 0,
              "not_media": 0}
     started = __import__("time").time()
+    categories: dict = {}
+    total = count_records(vic_path) if progress_cb else 0
+    canceled = False
 
     for entry in stream_media(vic_path):
+        if cancel_cb is not None and cancel_cb():
+            canceled = True
+            break
         stats["records"] += 1
+        if progress_cb is not None and stats["records"] % 50 == 0:
+            progress_cb(stats["records"], max(total, stats["records"]),
+                        len(out.records), "importing the Project VIC export")
         rel = (entry.get("RelativeFilePath") or "").replace("\\", os.sep)
         if not rel:
             stats["missing"] += 1
@@ -301,6 +364,10 @@ def import_media(vic_path: str, out_dir: str, *, files_root: str = "",
                 stored_once = True
         if stored_once:
             stats["found"] += 1
+        # By the bytes' own SHA-256, so a duplicate the output dropped still
+        # carries its category to the one file the case keeps.
+        if cat is not None and verify:
+            categories[sha256] = cat
 
     summary = {
         "image": os.path.abspath(vic_path),
@@ -315,14 +382,21 @@ def import_media(vic_path: str, out_dir: str, *, files_root: str = "",
         "case_number": header.get("CaseNumber", ""),
         "source_application": header.get("SourceApplicationName", ""),
         "duplicates_suppressed": out.dupes,
-        "canceled": False,
+        "canceled": canceled,
         "workers": 1,
         **stats,
         "total_files": len(out.records),
         "output_dir": out.outdir,
     }
+    if progress_cb is not None:
+        progress_cb(stats["records"], max(total, stats["records"]),
+                    len(out.records), "finished")
     out.close(summary)
-    return summary
+    # Kept out of the manifest: the summary there is the run's, and the
+    # categories go into the case, where the examiner can see and change them.
+    from dataclasses import asdict
+    return {**summary, "files": [asdict(r) for r in out.records],
+            "categories": categories}
 
 
 def _file_chunks(path: str) -> Iterator[bytes]:

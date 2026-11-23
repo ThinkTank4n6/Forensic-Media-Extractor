@@ -155,6 +155,23 @@ class StoreUnreachable(RuntimeError):
     """The store could not be opened, with a reason a person can act on."""
 
 
+
+# The longest description a contribution carries. A note is a few lines; a
+# pasted report is not what the store is for, and every lookup returns it.
+MAX_DESCRIPTION = 2000
+
+
+def described(note) -> str:
+    """A case note as a contributed hash's record: {"Description": note}.
+
+    The note travels with the grading -- Griffeye's GID does the same -- so
+    the next case to meet the file reads what the examiner who graded it
+    wrote, not only the category. Empty when there is no note.
+    """
+    text = str(note or "").strip()[:MAX_DESCRIPTION]
+    return json.dumps({"Description": text}) if text else ""
+
+
 class NotYourSource(ValueError):
     """A contribution named a case source another person owns.
 
@@ -1069,13 +1086,16 @@ class HashStore:
             code = row.get("category")
             if not label:
                 continue
+            # None: the row says nothing about a description, and whatever
+            # the store holds stays. "" clears one.
+            meta = described(row["description"]) if "description" in row else None
             for key in ("md5", "sha1", "sha256"):
                 digest = str(row.get(key) or "").lower().strip()
                 if digest and hashsets.HASH_RE.match(digest) \
                         and digest not in hashsets.EMPTY_FILE_HASHES:
                     prepared.append((digest, key,
                                      code if isinstance(code, int) else None,
-                                     label))
+                                     label, meta))
         if not prepared:
             raise ValueError("Nothing usable to contribute: every row needs a "
                              "hash and the label it was graded with.")
@@ -1084,12 +1104,14 @@ class HashStore:
         source_id = self._case_source(source_name, "", note,
                                       contributor=contributor, admin=admin,
                                       check_owner=bool(contributor))
-        rows = [(digest, algo, source_id, code, label, "")
-                for digest, algo, code, label in prepared]
+        rows = [(digest, algo, source_id, code, label, meta or "")
+                for digest, algo, code, label, meta in prepared]
         # Regraded first, inside the write lock _case_source took: _write
         # commits as it counts, which ends that transaction, and a regrade
         # after it ran unprotected from a removal landing in between.
         written = self._regrade(rows, source_name, contributor, changes)
+        self._redescribe([row for row, (*_, meta) in zip(rows, prepared)
+                          if meta is not None])
         written += self._write(rows)
         self._con.commit()
         self._checkpoint()
@@ -1143,6 +1165,20 @@ class HashStore:
             "SELECT id FROM sources WHERE name=?",
             (source_name,)).fetchone()["id"]
 
+    def _redescribe(self, rows) -> None:
+        """A case contributed again carries its descriptions as they are now.
+
+        INSERT OR IGNORE keeps a row the case already sent, so a note
+        written, changed or cleared since would never reach the store. Only
+        a case's own rows come through here (contribute, contribute_rows);
+        an imported set's records are never touched.
+        """
+        if not rows:
+            return
+        self._con.executemany(
+            "UPDATE hashes SET meta=? WHERE digest=? AND source_id=? AND meta<>?",
+            [(row[5], row[0], row[2], row[5]) for row in rows])
+
     def _regrade(self, rows, source_name: str = "", by: str = "",
                  changes: list = None) -> int:
         """Bring a case's earlier gradings up to date with what it sends now.
@@ -1190,7 +1226,8 @@ class HashStore:
 
     @_rolls_back
     def contribute(self, out_dir: str, source_name: str,
-                   categories=None, note: str = "") -> dict:
+                   categories=None, note: str = "",
+                   descriptions: bool = False) -> dict:
         """Put what this case decided into the store, for the next one.
 
         Only files an examiner graded are contributed, and the grading travels
@@ -1234,10 +1271,11 @@ class HashStore:
                 by_sets += 1
                 continue
             label = names.get(code, str(code))
+            meta = described((decided or {}).get("note")) if descriptions else ""
             for key in ("md5", "sha1", "sha256"):
                 digest = (rec.get(key) or "").lower()
                 if digest and digest not in hashsets.EMPTY_FILE_HASHES:
-                    rows.append((digest, key, None, code, label))
+                    rows.append((digest, key, meta, code, label))
             contributed += 1
 
         if not rows:
@@ -1252,8 +1290,12 @@ class HashStore:
         source_id = self._case_source(
             source_name, os.path.abspath(out_dir),
             note or f"contributed from {os.path.basename(out_dir)}")
-        prepared = [(d, a, source_id, c, n, "") for d, a, _, c, n in rows]
+        prepared = [(d, a, source_id, c, n, m) for d, a, m, c, n in rows]
         self._regrade(prepared, source_name)
+        if descriptions:
+            # Only when asked: contributed without them, a case keeps the
+            # descriptions it sent before.
+            self._redescribe(prepared)
         self._write(prepared)
         self._con.commit()
         self._checkpoint()

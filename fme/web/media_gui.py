@@ -546,7 +546,9 @@ def _release_case(out_dir: str) -> bool:
 CUSTOM_SIGNATURES = []
 SIG_LOCK = threading.Lock()
 
+# .json: a Project VIC export with its media beside it opens as a case.
 IMAGE_EXTENSIONS = {".img", ".dd", ".raw", ".e01", ".e02", ".ex01", ".l01",
+                    ".json",
                     ".001", ".bin", ".vmdk", ".vhd", ".vhdx", ".qcow", ".qcow2"}
 
 DEFAULT_IMAGE_PATH = ""
@@ -657,26 +659,36 @@ def api_vic_import():
     job_root = OUT_ROOT
     os.makedirs(job_root, exist_ok=True)
     out_dir = os.path.join(job_root, job_id)
+    cancel = threading.Event()
     with JOBS_LOCK:
         JOBS[job_id] = {"status": "running", "done": 0, "total": 0,
                         "recovered": 0, "phase": "projectvic", "files": [],
                         "summary": None, "error": None, "path": vic_path,
-                        "out_dir": out_dir, "_cancel": threading.Event(),
-                        # import_media takes no cancel callback: /api/cancel
-                        # must say so rather than report a cancel that the
-                        # import, still writing, never sees.
-                        "_uncancelable": True}
+                        "out_dir": out_dir, "_cancel": cancel}
+    try:
+        # A case like any other (v2026.11.336): it was imported into a
+        # folder nothing listed, so it could not be opened again.
+        _registry().register(out_dir, source=vic_path)
+    except (OSError, sqlite3.Error):
+        pass
+
+    def progress(done, total, recovered, phase, stats=None):
+        with JOBS_LOCK:
+            JOBS[job_id].update(done=done, total=total, recovered=recovered,
+                                phase=phase)
 
     def run():
         try:
-            summary = vic_import.import_media(
-                vic_path, out_dir, files_root=(data.get("files_root") or "").strip(),
-                verify=not data.get("no_verify"))
-            with open(os.path.join(out_dir, "manifest.json"), encoding="utf-8") as fh:
-                files = json.load(fh)["files"]
+            summary, files, categories = _import_vic_case(
+                job_id, vic_path, out_dir,
+                files_root=(data.get("files_root") or "").strip(),
+                verify=not data.get("no_verify"),
+                progress=progress, cancel=cancel.is_set)
+            _categorize_from_vic(job_id, summary, categories)
             with JOBS_LOCK:
                 JOBS[job_id].update(
-                    status="done", phase="finished", summary=summary,
+                    status="canceled" if summary.get("canceled") else "done",
+                    phase="finished", summary=summary,
                     recovered=len(files),
                     files=_file_entries(files))
         except Exception as exc:  # noqa: BLE001
@@ -688,6 +700,54 @@ def api_vic_import():
         LAST_JOB["id"] = job_id   # so a page reload can rejoin this run
     threading.Thread(target=run, daemon=True).start()
     return jsonify({"ok": True, "mode": "import", "job_id": job_id})
+
+
+def _import_vic_case(job_id: str, vic_path: str, out_dir: str, *,
+                     files_root: str = "", verify: bool = True,
+                     progress=None, cancel=None) -> tuple:
+    """Run a Project VIC export -- Physical Analyzer's, or anyone's -- as a
+    case: its media copied into the case and verified against the record.
+
+    Answers (summary, files, categories): {sha256: the category the export
+    gave}, for _categorize_from_vic once the job holds the files.
+    """
+    summary = vic_import.import_media(
+        vic_path, out_dir, files_root=files_root, verify=verify,
+        progress_cb=progress, cancel_cb=cancel)
+    files = summary.pop("files", [])
+    categories = summary.pop("categories", {})
+    try:
+        _registry().refresh(out_dir)
+    except (OSError, sqlite3.Error):
+        pass
+    return summary, files, categories
+
+
+def _categorize_from_vic(job_id: str, summary: dict, categories: dict) -> dict:
+    """Grade the case's files as the export graded them.
+
+    Through _apply_hash_categories, so the export is treated as a hash set:
+    only a file nobody has graded is changed, the record's VICS category is
+    mapped onto the case's scheme, and the decision is marked as the set's,
+    not the examiner's. A file whose bytes did not match its record is not
+    in the map (import_media leaves it out).
+    """
+    if not categories:
+        return {"categorized": 0}
+    name = summary.get("source_application") or "Project VIC"
+    label = f"{name} export"
+    lookup = {digest: [{"kind": "projectvic", "category": cat, "set": label}]
+              for digest, cat in categories.items()}
+    try:
+        result = _apply_hash_categories(job_id, lookup)
+    except (OSError, sqlite3.Error) as exc:
+        print(f"[projectvic] categories not applied: {exc}", flush=True)
+        return {"categorized": 0, "error": str(exc)}
+    summary["vic_categorized"] = result.get("categorized", 0)
+    with JOBS_LOCK:
+        if job_id in JOBS:
+            JOBS[job_id]["vic_categorized"] = result.get("categorized", 0)
+    return result
 
 
 def _print_finished(summary: dict, files: list) -> None:
@@ -1297,7 +1357,15 @@ def _store_scan(job: dict, data: dict) -> dict:
         raise FileNotFoundError("That job has no manifest")
     store = _store()
     result = store.scan_manifest(manifest)
+    return _apply_store_result(job, data, result)
 
+
+def _apply_store_result(job: dict, data: dict, result: dict, csv: bool = True,
+                        only=None) -> dict:
+    """What a store check found, kept with the case and applied: the whole
+    case's (`_store_scan`, at the end of a run or from the button), or one
+    batch's while the run is still going (`_LiveStoreCheck`, `only` naming
+    the batch's files and no CSV until the end)."""
     # The examiner's own stash, checked in the same pass. It holds what
     # they decided in earlier cases, which is the whole reason it exists:
     # filling it as they work and never consulting it means grading the
@@ -1329,13 +1397,14 @@ def _store_scan(job: dict, data: dict) -> dict:
             LOG.warning("the stash could not be checked: %s", exc)
 
     csv_path = os.path.join(job["out_dir"], "hash_store_matches.csv")
-    hashsets.write_csv(
-        {"rows": [{"record": r["record"],
-                   "matches": [{"set": m["source"], "kind": m["kind"],
-                                "note": m["note"] or "",
-                                "record": m.get("record") or {}}
-                               for m in r["matches"]]}
-                  for r in result["rows"]]}, csv_path)
+    if csv:
+        hashsets.write_csv(
+            {"rows": [{"record": r["record"],
+                       "matches": [{"set": m["source"], "kind": m["kind"],
+                                    "note": m["note"] or "",
+                                    "record": m.get("record") or {}}
+                                   for m in r["matches"]]}
+                      for r in result["rows"]]}, csv_path)
 
     lookup = {}
     for row in result["rows"]:
@@ -1383,12 +1452,12 @@ def _store_scan(job: dict, data: dict) -> dict:
         # and keeps the session sets'. A dict update replaced each file's
         # whole list, session matches included.
         case.merge_derived("hash_matches", lambda saved: hashsets.merge_matches(
-            saved, lookup, {"store", "stash"}))
+            saved, lookup, {"store", "stash"}, only=only))
 
     with JOBS_LOCK:
         merged = hashsets.merge_matches(
             JOBS[data["job"]].get("hash_matches") or {}, lookup,
-            {"store", "stash"})
+            {"store", "stash"}, only=only)
         JOBS[data["job"]]["hash_matches"] = merged
         for entry in JOBS[data["job"]]["files"]:
             entry["hash_sets"] = merged.get(entry.get("sha256"), [])
@@ -1399,13 +1468,205 @@ def _store_scan(job: dict, data: dict) -> dict:
     applied = _apply_hash_categories(
         data["job"], lookup, hold=[c.get("sha256", "") for c in stash_clash]) \
         if data.get("autocategorize", True) else {"categorized": 0}
+    described = _describe_from_store(case, lookup) \
+        if case is not None and data.get("autocategorize", True) else 0
     return ({"ok": True, "csv": csv_path, "checked": result["checked"],
                     "locations": result.get("locations", result["checked"]),
                     "matched": result["matched"],
                     "unmatched": result["unmatched"],
                     "by_source": result["by_source"], "applied": applied,
+                    # Files with any match, the store's or the stash's, once.
+                    "matched_files": len(lookup),
+                    "described": described,
                     "your_stash": len(stash_found),
                     "stash_disagreements": stash_clash})
+
+
+def _describe_from_store(case, lookup: dict) -> int:
+    """Fill in the note of a file the store describes, where it has none.
+
+    A case contributed to the store takes its notes with it as descriptions
+    (hashstore.described); a later case meeting the same file starts with
+    what was written about it, and says whose words they are. A note the
+    examiner has written here is never replaced.
+    """
+    described = {d: m for d, m in lookup.items()
+                 if any(x.get("via") == "store" and x.get("kind") == "case"
+                        and (x.get("record") or {}).get("Description") for x in m)}
+    if case is None or not described:
+        return 0               # nothing to read the whole case's notes for
+    try:
+        decided = case.decisions()
+    except sqlite3.Error:
+        return 0
+    wrote = 0
+    for digest, matches in described.items():
+        if (decided.get(digest) or {}).get("note"):
+            continue
+        for match in matches:
+            text = str((match.get("record") or {}).get("Description") or "").strip()
+            if match.get("via") == "store" and match.get("kind") == "case" and text:
+                try:
+                    if case.set_note_if_empty(
+                            digest, f"{text}\n(described in {match.get('set')}, "
+                                    f"from the hash store)"):
+                        wrote += 1
+                except sqlite3.Error:
+                    pass
+                break
+    return wrote
+
+
+def _store_if_set_up():
+    """The store, if one has been set up -- never one made empty by asking.
+    None when there is none, or it cannot be reached just now."""
+    where = STORE_PATH
+    if not where or (not remotestore.looks_remote(where) and not os.path.isfile(where)):
+        return None
+    try:
+        return _store(create=False)
+    except (OSError, sqlite3.Error, ValueError) as exc:
+        LOG.warning("the hash store could not be opened: %s", exc)
+        return None
+
+
+def _store_result_for(store, records: list) -> dict:
+    """These records looked up in the store at once, in the shape
+    scan_manifest gives for a whole case: one row per record, its matches one
+    per source, and which of its hashes each source matched on."""
+    digests_of = []
+    wanted = set()
+    for rec in records:
+        digests = sorted({(rec.get(k) or "").lower()
+                          for k in ("md5", "sha1", "sha256")} - {""})
+        digests_of.append(digests)
+        wanted.update(digests)
+    if not wanted:
+        return {"rows": [], "checked": 0, "matched": 0, "unmatched": 0,
+                "by_source": {}}
+    if isinstance(store, remotestore.RemoteHashStore):
+        hits = store.lookup(sorted(wanted))     # per digest already
+    else:
+        hits = store.lookup(sorted(wanted), per_digest=True)
+    by_digest: dict = {}
+    for hit in hits:
+        by_digest.setdefault((hit.get("digest") or "").lower(), []).append(hit)
+    rows, by_source, matched = [], {}, 0
+    for rec, digests in zip(records, digests_of):
+        per_source: dict = {}
+        for digest in digests:
+            for hit in by_digest.get(digest, []):
+                entry = per_source.get(hit.get("source"))
+                if entry is None:
+                    entry = dict(hit)
+                    entry["matched_on"] = str(hit.get("matched_on") or hit.get("algo") or "")
+                    per_source[hit.get("source")] = entry
+                else:
+                    algos = set(entry["matched_on"].split(", ")) | {
+                        str(hit.get("matched_on") or hit.get("algo") or "")}
+                    entry["matched_on"] = ", ".join(sorted(a for a in algos if a))
+        matches = list(per_source.values())
+        if matches:
+            matched += 1
+            for m in matches:
+                by_source[m.get("source")] = by_source.get(m.get("source"), 0) + 1
+        rows.append({"record": rec, "matches": matches})
+    return {"rows": rows, "checked": len(rows), "matched": matched,
+            "unmatched": len(rows) - matched, "by_source": by_source}
+
+
+class _LiveStoreCheck:
+    """A run checked against the hash store while it is still going
+    (v2026.11.336).
+
+    The store was asked only once a run had finished, and only by the page:
+    an examiner re-processing a phone whose pictures were all graded in an
+    earlier case watched 129,230 files arrive as Uncategorized, and if the
+    page was closed, reloaded or on another case when the run ended, nothing
+    asked at all. Every few thousand files now, the new ones are looked up
+    in the store (and the stash) and what they were graded as applied as
+    they arrive -- set by a hash set, never over a grading made by hand --
+    and the whole case is checked again by the server when the run ends.
+
+    On its own thread: a shared store is a network call, and the extraction
+    never waits for it.
+    """
+
+    BATCH = 5000
+    EVERY = 15.0                    # seconds, for a run that trickles
+
+    def __init__(self, job_id: str):
+        self.job_id = job_id
+        self.pending: list = []
+        self.lock = threading.Lock()
+        self.wake = threading.Event()
+        self.finished = threading.Event()
+        self.ending = False
+        self.counts = {"checked": 0, "matched": 0, "categorized": 0}
+        self.thread = threading.Thread(target=self._work, daemon=True,
+                                       name="store-live")
+        self.thread.start()
+
+    def add(self, records) -> None:
+        records = [r for r in records if r.get("sha256") or r.get("md5")]
+        if not records:
+            return
+        with self.lock:
+            self.pending.extend(records)
+            full = len(self.pending) >= self.BATCH
+        if full:
+            self.wake.set()
+
+    def end(self, wait: float = 120.0) -> None:
+        """What is left is checked, and the thread let go."""
+        self.ending = True
+        self.wake.set()
+        self.finished.wait(wait)
+
+    def _work(self) -> None:
+        _lower_this_thread()
+        try:
+            while True:
+                self.wake.wait(self.EVERY)
+                self.wake.clear()
+                with self.lock:
+                    batch, self.pending = self.pending[:self.BATCH], self.pending[self.BATCH:]
+                    more = bool(self.pending)
+                if batch:
+                    self._check(batch)
+                if more:
+                    self.wake.set()
+                elif self.ending:
+                    return
+        finally:
+            self.finished.set()
+
+    def _check(self, records: list) -> None:
+        with JOBS_LOCK:
+            job = JOBS.get(self.job_id)
+        if job is None:
+            return
+        store = _store_if_set_up()
+        stash_on = settings.load().get("stash_on", "1") != "0"
+        if store is None and not stash_on:
+            return
+        try:
+            result = (_store_result_for(store, records) if store is not None else
+                      {"rows": [{"record": r, "matches": []} for r in records],
+                       "checked": len(records), "matched": 0,
+                       "unmatched": len(records), "by_source": {}})
+            answer = _apply_store_result(
+                job, {"job": self.job_id}, result, csv=False,
+                only={(r.get("sha256") or "").lower() for r in records})
+        except Exception as exc:  # noqa: BLE001 - the run goes on; said in the log
+            LOG.warning("checking new files against the hash store failed: %s", exc)
+            return
+        self.counts["checked"] += result["checked"]
+        self.counts["matched"] += answer.get("matched_files", result["matched"])
+        self.counts["categorized"] += (answer.get("applied") or {}).get("categorized", 0)
+        with JOBS_LOCK:
+            if self.job_id in JOBS:
+                JOBS[self.job_id]["live_store"] = dict(self.counts)
 
 
 # job id -> {"state": running|done|failed, "started", "finished", "result"
@@ -1415,10 +1676,16 @@ STORE_SCANS_LOCK = threading.Lock()
 
 
 def _store_scan_in_background(job_id: str, job: dict, data: dict) -> dict:
-    """Start the check on a thread, once per case at a time; what it is now."""
+    """Start the check on a thread, once per case at a time; what it is now.
+    A check finished in the last two minutes is the answer, unless `again`:
+    the server checks a run when it ends (v2026.11.336), and the page's own
+    check after a run would otherwise do a large case's work twice."""
     with STORE_SCANS_LOCK:
         held = STORE_SCANS.get(job_id)
         if held and held["state"] == "running":
+            return dict(held)
+        if (held and held["state"] == "done" and not data.get("again")
+                and time.time() - held.get("finished", 0) < 120):
             return dict(held)
         STORE_SCANS[job_id] = {"state": "running", "started": time.time()}
 
@@ -1496,6 +1763,55 @@ def _job_file_entry(f: dict, shown_again=frozenset()) -> dict:
     }
 
 
+def _vic_source_info(path: str) -> dict:
+    """What the extraction screen shows for a Project VIC export.
+
+    Refused when the file is a hash set with no media beside it -- a
+    national Project VIC download, say: run as a case it would import
+    nothing. That belongs on the Hashes tab.
+    """
+    path = os.path.abspath(path)
+    beside = vic_import.media_alongside(path)
+    if not beside["found"]:
+        raise ValueError(
+            "this is a Project VIC file, but none of the first "
+            f"{beside['looked']} records has its media beside it. A hash set "
+            "with no media is loaded on the Hashes tab; an export is opened "
+            "here with the folder of files it was written with still next to it")
+    header = vic_import.case_header(path)
+    records = vic_import.count_records(path)
+    size = os.path.getsize(path)
+    app_name = header.get("SourceApplicationName") or "unknown program"
+    return {
+        "path": path, "ok": True, "kind": "projectvic",
+        "container": f"Project VIC export ({app_name})",
+        "size": size, "size_human": media_core.human(size), "segments": 1,
+        "partition_scheme": None, "boot_preview": "", "warnings": [],
+        "engine": "Project VIC import", "version": vic_import.__version__,
+        "case_number": header.get("CaseNumber", ""),
+        "source_application": app_name,
+        "records": records,
+        "volumes": [{
+            "label": "Project VIC export", "offset": 0,
+            "size_human": f"{records:,} records", "fs": "projectvic",
+            "volume_label": os.path.basename(path),
+            "description": (
+                f"{records:,} media records. Each file is copied in and "
+                f"checked against the hashes in its record; the category "
+                f"the export gives is applied to files nobody has graded, "
+                f"marked as the export's. Carving and file-system options "
+                f"do not apply."),
+        }],
+    }
+
+
+def _is_vic_source(path: str) -> bool:
+    with ACTIVE_LOCK:
+        info = ACTIVE.get("info") or {}
+    return info.get("kind") == "projectvic" and \
+        os.path.abspath(info.get("path") or "") == os.path.abspath(path)
+
+
 @app.route("/api/use", methods=["POST"])
 def api_use():
     """Accept an inspected image as the one to work on — the equivalent of
@@ -1512,6 +1828,18 @@ def api_use():
             ACTIVE.update(path=os.path.abspath(path), info=None)
         return jsonify({"ok": True, "accepted": True, "info": None,
                         "path": os.path.abspath(path)})
+
+    if os.path.isfile(path) and hashsets.looks_like_vics(path):
+        # A Project VIC export -- Physical Analyzer's "Project VIC" export of
+        # a processed phone, say -- is run as a case of its own (v2026.11.336).
+        try:
+            info = _vic_source_info(path)
+        except (OSError, ValueError) as exc:
+            return error_response(ValueError(f"Not accepted: {exc}"))
+        with ACTIVE_LOCK:
+            ACTIVE.update(path=info["path"], info=info)
+        return jsonify({"ok": True, "accepted": True, "info": info,
+                        "path": info["path"]})
 
     info = media_core.inspect_image(path)
     if not info["ok"]:
@@ -1982,6 +2310,10 @@ def api_start():
     job_id = uuid.uuid4().hex
     out_dir = os.path.join(job_root, job_id)
     cancel = threading.Event()
+    vic_source = _is_vic_source(path)
+    if vic_source and not case_number:
+        with ACTIVE_LOCK:
+            case_number = (ACTIVE.get("info") or {}).get("case_number", "") or ""
 
     # Taken with the image lock held, in the order /api/release takes them:
     # the accepted image was read at the top of this request and the lock let
@@ -2014,6 +2346,11 @@ def api_start():
         # work and wondering whether it has hung.
         live = {"at": 0.0}
         tail = _ManifestTail(os.path.join(out_dir, "manifest.csv"))
+        # Checked against the hash store as files arrive, when there is a
+        # store or a stash to ask (v2026.11.336).
+        checker = (_LiveStoreCheck(job_id)
+                   if (_store_if_set_up() is not None
+                       or settings.load().get("stash_on", "1") != "0") else None)
 
         def refresh_files():
             # Only the rows written since the last look. Re-reading the whole
@@ -2034,6 +2371,8 @@ def api_start():
             with JOBS_LOCK:
                 before = [] if tail.restarted else JOBS[job_id].get("files", [])
                 JOBS[job_id]["files"] = before + entries
+            if checker is not None:
+                checker.add(records)
 
         def progress(done, total, recovered, phase, stats=None):
             with JOBS_LOCK:
@@ -2051,19 +2390,29 @@ def api_start():
                 refresh_files()
 
         try:
-            kwargs = dict(progress_cb=progress, **options)
-            if SUPPORTS_CANCEL:
-                kwargs["cancel_cb"] = cancel.is_set
-            if SUPPORTS_CUSTOM_SIGS and extra_signatures:
-                kwargs["extra_signatures"] = extra_signatures
-            if credentials:
-                kwargs["credentials"] = credentials
-            summary = media_core.run_extraction(path, out_dir, **kwargs)
-            files = summary.pop("files", [])
-            try:
-                _registry().refresh(out_dir)
-            except (OSError, sqlite3.Error):
-                pass
+            vic_categories = None
+            if vic_source:
+                summary, files, vic_categories = _import_vic_case(
+                    job_id, path, out_dir, progress=progress, cancel=cancel.is_set)
+            else:
+                kwargs = dict(progress_cb=progress, **options)
+                if SUPPORTS_CANCEL:
+                    kwargs["cancel_cb"] = cancel.is_set
+                if SUPPORTS_CUSTOM_SIGS and extra_signatures:
+                    kwargs["extra_signatures"] = extra_signatures
+                if credentials:
+                    kwargs["credentials"] = credentials
+                summary = media_core.run_extraction(path, out_dir, **kwargs)
+                files = summary.pop("files", [])
+                try:
+                    _registry().refresh(out_dir)
+                except (OSError, sqlite3.Error):
+                    pass
+            if vic_categories:
+                # The export's own grades, before the store is asked -- they
+                # were made on these very files -- and before the run is
+                # called done, so a page loading the case then sees them.
+                _categorize_from_vic(job_id, summary, vic_categories)
             _print_finished(summary, files)
             with JOBS_LOCK:
                 JOBS[job_id].update(
@@ -2088,10 +2437,23 @@ def api_start():
             # And make the gallery tiles now, while nobody is waiting.
             threading.Thread(target=_prefill_thumbs, args=(job_id,),
                              daemon=True).start()
+            # The whole case checked against the store by the server, now the
+            # manifest is whole -- whether or not a page is there to ask.
+            # The page's own check after a run joins this one.
+            if checker is not None:
+                checker.end()
+            if _store_if_set_up() is not None and not summary.get("canceled") \
+                    and not summary.get("cancelled"):
+                with JOBS_LOCK:
+                    finished = JOBS.get(job_id)
+                if finished is not None:
+                    _store_scan_in_background(job_id, finished, {"job": job_id})
         except Exception as exc:  # noqa: BLE001 - surfaced in the UI
             with JOBS_LOCK:
                 JOBS[job_id].update(status="error", error=str(exc))
             traceback.print_exc()
+            if checker is not None:
+                checker.end(wait=0)
 
     try:
         # Record the case as soon as it starts, so a run that is cancelled or
@@ -2834,26 +3196,38 @@ class _Prefill:
             kind: {"rels": [r for r in rels if (r in videos) == (kind == "video")],
                    "index": 0, "ahead": collections.deque()}
             for kind in ("image", "video")}
-        self.queued = set()
+        self.queued = set()     # taken by a worker this sweep -- not "made"
+        self.making = set()     # being made now
         self.lock = threading.Lock()
         self.made = 0
         self.running = 0
         self.kind_running = {"image": 0, "video": 0}
 
-    def next_path(self, kind: str = "image"):
+    def next_path(self, kind: str = "image", leaving: bool = False):
+        """The next file to make a tile for, or None. With leaving=True, a
+        worker that finds nothing is counted out in the same hold of the
+        lock: counted out later, a clip asked for in between was added
+        while the worker still counted as running, so nobody started
+        another, and the worker left without it -- a video tile with no
+        poster until something asked again (v2026.11.336)."""
         queue = self.queues[kind]
         with self.lock:
             while queue["ahead"]:
                 rel = queue["ahead"].popleft()
                 if rel not in self.queued:
                     self.queued.add(rel)
+                    self.making.add(rel)
                     return rel
             while queue["index"] < len(queue["rels"]):
                 rel = queue["rels"][queue["index"]]
                 queue["index"] += 1
                 if rel not in self.queued:
                     self.queued.add(rel)
+                    self.making.add(rel)
                     return rel
+            if leaving:
+                self.running -= 1
+                self.kind_running[kind] -= 1
         return None
 
     def want(self, rels, videos=None, replace: bool = True) -> int:
@@ -2869,7 +3243,14 @@ class _Prefill:
                 for queue in self.queues.values():
                     queue["ahead"].clear()
             for rel in reversed(rels[:PREFILL_AHEAD_MAX]):
-                if rel and rel not in self.queued:
+                # Asked for because its tile is missing now (the caller
+                # looked): taken once already this sweep is no reason to
+                # refuse it. Refused, a tile that failed once, or whose files
+                # were removed, stayed blank as long as the sweep ran -- hours
+                # on a large case. Only one being made this moment is left
+                # to its worker.
+                if rel and rel not in self.making:
+                    self.queued.discard(rel)
                     kind = "video" if rel in self.videos else "image"
                     ahead = self.queues[kind]["ahead"]
                     if not replace and rel in ahead:
@@ -2883,35 +3264,43 @@ class _Prefill:
         with self.lock:
             return bool(queue["ahead"]) or queue["index"] < len(queue["rels"])
 
+    def _make(self, kind: str, rel: str) -> bool:
+        """This file's tile, if it is missing. True when one was made."""
+        full = os.path.join(self.out_dir, rel)
+        if kind == "video":
+            sha = self.videos.get(rel) or ""
+            if not sha or not _tile_missing(self.out_dir, rel, sha):
+                return False
+            return bool(os.path.isfile(full) and video_frames.extract(
+                full, self.out_dir, sha, background=True).get("ok"))
+        if os.path.isfile(_thumb_path(self.out_dir, rel)):
+            return False
+        return bool(os.path.isfile(full) and _make_thumb(self.out_dir, full, rel))
+
     def work(self, kind: str = "image") -> None:
         _lower_this_thread()
+        counted = True
         try:
             while True:
                 with JOBS_LOCK:
                     if self.job_id not in JOBS:      # the case was closed
                         return
-                rel = self.next_path(kind)
+                rel = self.next_path(kind, leaving=True)
                 if rel is None:
+                    counted = False                  # counted out with the lock held
                     return
-                full = os.path.join(self.out_dir, rel)
-                if kind == "video":
-                    sha = self.videos.get(rel) or ""
-                    if not sha or not _tile_missing(self.out_dir, rel, sha):
-                        continue
-                    if os.path.isfile(full) and video_frames.extract(
-                            full, self.out_dir, sha, background=True).get("ok"):
+                try:
+                    if self._make(kind, rel):
                         with self.lock:
                             self.made += 1
-                    continue
-                if os.path.isfile(_thumb_path(self.out_dir, rel)):
-                    continue
-                if os.path.isfile(full) and _make_thumb(self.out_dir, full, rel):
+                finally:
                     with self.lock:
-                        self.made += 1
+                        self.making.discard(rel)
         finally:
             with self.lock:
-                self.running -= 1
-                self.kind_running[kind] -= 1
+                if counted:
+                    self.running -= 1
+                    self.kind_running[kind] -= 1
                 last = self.running == 0
             if last:
                 if self.made:

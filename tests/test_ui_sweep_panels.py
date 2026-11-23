@@ -58,6 +58,7 @@ PLACES = [
     ("file export", "export-modal", "openFileExport()"),
     ("report", "report-modal", "openReport()"),
     ("logo", "logo-modal", "openLogo()"),
+    ("full-size viewer", "full-modal", "viewFullSize(visible()[0])"),
     ("file picker", "browse-modal",
      "openBrowser(p => {}, '', 'Choose a folder for results')"),
 ]
