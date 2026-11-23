@@ -4,6 +4,53 @@ The release number is in `VERSION` and is reported by both GUIs, the console
 banner, and the Project VIC and LAVA exports, so a report can be traced back
 to the build that produced it.
 
+## v2026.11.337 — Ctrl-Z puts a page back the way it was, with the hash store running
+
+Reported: grading a page of 500 from 8 (Uncategorized) and pressing 2 by
+mistake, Ctrl-Z brought them back as **0, Non-Pertinent**, not 8. The undo
+itself restored 8; two things around it did not hold:
+
+- **The store graded them again straight after.** Undo put the files back to
+  "nobody has graded this", which is exactly what a hash set or the store is
+  allowed to grade -- and since v2026.11.336 the store is asked every 15
+  seconds during a run and again at its end. The same phone's pictures were
+  mostly Non-Pertinent in the store, so the next pass made the page 0. Files
+  an examiner's undo puts back to ungraded are now **kept ungraded**
+  (`case.db` table `kept_ungraded`): no hash set, store or NSRL pass grades
+  them until the examiner grades them again.
+- **Every file a machine graded was an undo step of its own.** Undo keeps
+  the last 50 steps; one store pass of a few hundred files pushed every
+  grading of the examiner's out, and Ctrl-Z took back one store-graded file
+  instead of the page. A hash-set or store pass is now **one step per
+  category and set**, kept apart from the examiner's (`casedb.AUTO_ACTION`),
+  and never what Ctrl-Z takes back. The last 50 of each are kept, so store
+  passes cannot push the examiner's out. Batches written by earlier
+  releases are told apart by their "by hash set:" description.
+
+### "done" no longer vanishes when a run ends
+
+GitHub's Python 3.12 job failed `test_store_classifies` and
+`test_hashset_import_categories` on v2026.11.336, each waiting two minutes
+for the status line to say "done". The run had finished; the page had
+written "done — N file(s) recovered" and then started its own store check,
+which -- the server having checked the run as it ended -- answered at once
+and **replaced the line** within milliseconds. An examiner lost the
+run's result the same way. The store check's message now follows the run's
+line instead of replacing it: "done — N file(s) recovered · Store check
+finished …".
+
+It showed only on a slower runner because the server's during-run check
+waits 15 s between passes, and a test's run is over in seconds: here it never
+ran during a run at all. `FME_LIVE_STORE_EVERY` shortens the wait, and both
+tests now run with it at 0.05 s, so that path is exercised on every run; the
+reproduction failed 3 times in 8 before the change and 0 in 11 after.
+
+`tests/test_undo_with_store.py` follows the report: a page graded 1, then 2
+by mistake while the store works on other files; Ctrl-Z twice brings it back
+to 8, the store's own grades are left alone, the next store pass leaves the
+page at 8, and a hundred store passes do not push the examiner's grading out
+of Undo.
+
 ## v2026.11.336 — Hash store categories during a run, Physical Analyzer's Project VIC export as a case, wellbeing, and rotate/brightness in the viewer
 
 ### The hash store categorizes a run as it goes, and when it ends

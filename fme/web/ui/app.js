@@ -6518,6 +6518,12 @@ $("store-scan").addEventListener("click", async () => {
     // Pressed by the examiner, it checks again; after a run, it shows the
     // check the server made when the run ended.
     const again = !storeCheckAuto;
+    // A check started by a run ending follows the run's own line rather
+    // than replacing it (v2026.11.337): since the server checks a run as it
+    // ends, this one answers at once, and "done — N file(s) recovered" was
+    // gone before anyone could read it.
+    const afterRun = storeCheckAuto && /^(done|canceled) — /.test($("status").textContent)
+      ? $("status").textContent.split(" · Store check")[0] : "";
     storeCheckAuto = false;
     let state = await api("/api/store/scan", {
       method: "POST", headers: {"Content-Type": "application/json"},
@@ -6548,7 +6554,7 @@ $("store-scan").addEventListener("click", async () => {
       (categorized ? `, ${categorized.toLocaleString()} categorized from the match` : "") +
       `. The details are on the Hashes tab.`;
     toast(esc(ended));
-    $("status").textContent = ended;
+    $("status").textContent = afterRun ? `${afterRun} · ${ended}` : ended;
     $("store-result").innerHTML =
       `Checked ${d.checked.toLocaleString()} file(s)` +
       (d.locations && d.locations !== d.checked

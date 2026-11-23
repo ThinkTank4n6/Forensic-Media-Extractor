@@ -287,6 +287,11 @@ except ImportError:
 with socket.socket() as probe:
     probe.bind(("127.0.0.1", 0))
     PORT = probe.getsockname()[1]
+# The server checks a run against the store while it goes, every 15 s; a
+# test's run is over in seconds, so here that check never ran during one --
+# and a page that lost its "done" line to it passed here and failed on
+# GitHub's slower runner (v2026.11.337). Checked during every run instead.
+os.environ["FME_LIVE_STORE_EVERY"] = "0.05"
 
 server = subprocess.Popen(
     [sys.executable, "-m", "fme", "gui", "--port", str(PORT), "--no-browser"],

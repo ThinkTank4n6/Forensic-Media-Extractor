@@ -266,6 +266,11 @@ it is finding anything, which is the question during a long run.
 
 ## The hash store grades a run while it is running
 
+**Undo and the store.** Ctrl-Z takes back your own gradings, never the
+store's or a hash set's. Files your undo puts back to Uncategorized stay
+there: the store does not grade them again behind you. They are yours until
+you grade them.
+
 With a hash store set up, a run is checked against it **as it goes**: the
 files found so far are looked up in batches, and anything the store knows is
 graded as it arrives — only a file nobody has graded, and marked as the

@@ -37,6 +37,11 @@ logging.disable(logging.CRITICAL)
 ok = True
 ROOT = os.path.join(tempfile.gettempdir(), "fme_store_classifies-") + str(os.getpid())
 PORT = 8804
+# The server checks a run against the store while it goes, every 15 s; a
+# test's run is over in seconds, so here that check never ran during one --
+# and a page that lost its "done" line to it passed here and failed on
+# GitHub's slower runner (v2026.11.337). Checked during every run instead.
+os.environ["FME_LIVE_STORE_EVERY"] = "0.05"
 
 
 def check(label, good, detail=""):
@@ -161,6 +166,19 @@ try:
             announced = False
         check("and says when that check finished, from the gallery", announced,
               page.evaluate("() => document.getElementById('toast').innerText")[:160])
+        # The run's own line stays, with the check's after it (v2026.11.337):
+        # the check answered at once and replaced "done -- N file(s)
+        # recovered" before anyone, or this test, could read it.
+        try:
+            page.wait_for_function(
+                "() => /Store check finished/.test(document.getElementById('status').innerText)",
+                timeout=30000)
+        except Exception:                                  # noqa: BLE001
+            pass
+        line = page.evaluate("() => document.getElementById('status').innerText")
+        check("the status line still says the run is done, then the check",
+              line.startswith("done") and "file(s) recovered" in line
+              and "Store check finished" in line, line[:160])
         check("nothing the page did threw", not thrown, "; ".join(thrown[:2]))
         browser.close()
 finally:

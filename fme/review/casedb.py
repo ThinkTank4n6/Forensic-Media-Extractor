@@ -123,6 +123,14 @@ SCHEME_VERSION = 3
 # with history nobody will ever use.
 UNDO_DEPTH = 50
 
+# The undo batch a machine's grading is kept under -- a hash set, the store,
+# the NSRL. Kept apart from the examiner's own: Ctrl-Z takes back what the
+# examiner did, and a store pass grading thousands of files one at a time
+# had pushed every grading of theirs out of the last UNDO_DEPTH.
+AUTO_ACTION = "auto"
+# Batches made before AUTO_ACTION existed, told apart by what they say.
+_AUTO_LEGACY = "% by hash set: %"
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (
     key TEXT PRIMARY KEY, value TEXT);
@@ -189,6 +197,15 @@ CREATE TABLE IF NOT EXISTS derived (
 -- is the part you need when a key was pressed with the wrong files
 -- selected. Rows are grouped into batches: one keystroke is one batch,
 -- whether it touched one file or a hundred thousand.
+-- Files an examiner's undo put back to ungraded (v2026.11.337). A hash set
+-- or the store grades only a file nobody has graded, and an undo makes a
+-- file look exactly like that: the next pass graded it straight away, and
+-- to the examiner the undo itself had graded the page Non-Pertinent. A file
+-- here is left to the examiner until they grade it.
+CREATE TABLE IF NOT EXISTS kept_ungraded (
+    sha256 TEXT PRIMARY KEY,
+    at TEXT NOT NULL);
+
 CREATE TABLE IF NOT EXISTS undo_batches (
     batch_id INTEGER PRIMARY KEY AUTOINCREMENT,
     at TEXT NOT NULL,
@@ -579,9 +596,17 @@ class CaseDB:
               *existing.get(sha256, blank))
              for sha256 in sha256_list])
 
+        # The last UNDO_DEPTH of each kind: a machine's batches never push
+        # out the examiner's.
+        machine = "(action = ? OR detail LIKE ?)"
         old = self._con.execute(
-            "SELECT batch_id FROM undo_batches ORDER BY batch_id DESC "
-            "LIMIT -1 OFFSET ?", (UNDO_DEPTH,)).fetchall()
+            f"SELECT batch_id FROM undo_batches WHERE {machine} "
+            f"ORDER BY batch_id DESC LIMIT -1 OFFSET ?",
+            (AUTO_ACTION, _AUTO_LEGACY, UNDO_DEPTH)).fetchall()
+        old += self._con.execute(
+            f"SELECT batch_id FROM undo_batches WHERE NOT {machine} "
+            f"ORDER BY batch_id DESC LIMIT -1 OFFSET ?",
+            (AUTO_ACTION, _AUTO_LEGACY, UNDO_DEPTH)).fetchall()
         for row in old:
             self._con.execute("DELETE FROM undo_items WHERE batch_id=?",
                               (row["batch_id"],))
@@ -590,11 +615,16 @@ class CaseDB:
         return batch_id
 
     def undoable(self, limit: int = 10) -> list:
-        """The gradings that can still be taken back, newest first."""
+        """The examiner's gradings that can still be taken back, newest
+        first. A hash set's or the store's are not among them: Ctrl-Z after
+        a store pass undid one file the store had graded, not the page the
+        examiner had just graded wrong (v2026.11.337)."""
         with self._guard():
             return [dict(row) for row in self._con.execute(
                 "SELECT batch_id, at, action, detail, files FROM undo_batches "
-                "WHERE undone=0 ORDER BY batch_id DESC LIMIT ?", (limit,))]
+                "WHERE undone=0 AND action <> ? AND detail NOT LIKE ? "
+                "ORDER BY batch_id DESC LIMIT ?",
+                (AUTO_ACTION, _AUTO_LEGACY, limit))]
 
     def undo(self, batch_id: int = 0) -> dict:
         """Put a grading back the way it was.
@@ -612,8 +642,9 @@ class CaseDB:
             else:
                 row = self._con.execute(
                     "SELECT batch_id, at, action, detail, files FROM "
-                    "undo_batches WHERE undone=0 ORDER BY batch_id DESC "
-                    "LIMIT 1").fetchone()
+                    "undo_batches WHERE undone=0 AND action <> ? AND "
+                    "detail NOT LIKE ? ORDER BY batch_id DESC LIMIT 1",
+                    (AUTO_ACTION, _AUTO_LEGACY)).fetchone()
             if row is None:
                 return {"undone": 0, "reason": "There is nothing to undo."}
 
@@ -639,6 +670,8 @@ class CaseDB:
                                    f"{', '.join(map(str, gone))}, which this case "
                                    f"no longer has. Nothing was changed, and "
                                    f"the next undo goes on to the one before.")}
+            machine_batch = row["action"] == AUTO_ACTION or \
+                " by hash set: " in (row["detail"] or "")
             later = self._con.execute(
                 "SELECT COUNT(DISTINCT i.sha256) FROM undo_items i JOIN undo_batches b "
                 "ON b.batch_id = i.batch_id WHERE i.batch_id > ? AND b.undone = 0 "
@@ -695,6 +728,13 @@ class CaseDB:
                                           (item["sha256"],))
                 restored += 1
 
+            if not machine_batch:
+                # What the examiner's undo put back to ungraded stays there
+                # until they grade it: no hash set or store pass takes it.
+                self._con.executemany(
+                    "INSERT OR REPLACE INTO kept_ungraded (sha256, at) VALUES (?,?)",
+                    [(sha256, stamp) for sha256, state in per_file
+                     if state is None or state.get("category") == self.uncategorized])
             self._con.execute("UPDATE undo_batches SET undone=1 WHERE batch_id=?",
                               (batch,))
             # Each file and what it went back to, then the summary. The
@@ -912,7 +952,24 @@ class CaseDB:
                                       (d,)).fetchone())]
                 if not sha256_list:
                     return 0
-            self._record_undo(sha256_list, "categorize",
+            if only_if_undecided:
+                # Never a file the examiner's own undo put back to ungraded.
+                kept = set()
+                for start in range(0, len(sha256_list), 500):
+                    chunk = sha256_list[start:start + 500]
+                    kept.update(r["sha256"] for r in self._con.execute(
+                        f"SELECT sha256 FROM kept_ungraded WHERE sha256 IN "
+                        f"({','.join('?' * len(chunk))})", chunk))
+                sha256_list = [d for d in sha256_list if d not in kept]
+                if not sha256_list:
+                    return 0
+            else:
+                # Graded by the examiner: theirs again to grade as they like,
+                # and a machine's once more if they ever ungrade it.
+                self._con.executemany("DELETE FROM kept_ungraded WHERE sha256=?",
+                                      [(d,) for d in sha256_list])
+            self._record_undo(sha256_list,
+                              AUTO_ACTION if only_if_undecided else "categorize",
                               f"category {code}" + (f" by {by}" if by else ""))
             for sha256 in sha256_list:
                 self._con.execute(

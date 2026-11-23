@@ -1593,7 +1593,11 @@ class _LiveStoreCheck:
     """
 
     BATCH = 5000
-    EVERY = 15.0                    # seconds, for a run that trickles
+    # Seconds, for a run that trickles. FME_LIVE_STORE_EVERY shortens it so
+    # a test's run -- seconds long -- is checked while it is still going, as
+    # an examiner's always is; at 15 s it never was, and a hang there passed
+    # every test here and failed on GitHub's slower runner (v2026.11.337).
+    EVERY = float(os.environ.get("FME_LIVE_STORE_EVERY") or 15.0)
 
     def __init__(self, job_id: str):
         self.job_id = job_id
@@ -2797,6 +2801,7 @@ def _apply_hash_categories(job_id: str, lookup: dict, hold=()) -> dict:
     counts: dict = {}
     other_scheme = 0
     held = {d for d in hold if d}
+    writes: dict = {}
     for digest, matches in lookup.items():
         decided = decisions.get(digest)
         if decided and decided.get("category") != case.uncategorized:
@@ -2846,23 +2851,23 @@ def _apply_hash_categories(job_id: str, lookup: dict, hold=()) -> dict:
                         case.severity_rank(asserted):
                     asserted, source = local, match.get("set", kind)
 
-        # Written only if the file is still undecided when the write is made,
-        # under the case's own lock (CaseDB.set_category): the examiner may
-        # have graded it since `decisions` was read.
         if asserted is not None:
-            wrote = case.set_category(digest, asserted, by=f"hash set: {source}",
-                                      only_if_undecided=True)
+            writes.setdefault((asserted, f"hash set: {source}"), []).append(digest)
         elif known_good and case.non_pertinent is not None:
-            wrote = case.set_category(digest, case.non_pertinent,
-                                      by="hash set: NSRL (known software)",
-                                      only_if_undecided=True)
-            asserted = case.non_pertinent
-        else:
-            continue
-        if not wrote:
-            continue
-        changed += 1
-        counts[asserted] = counts.get(asserted, 0) + 1
+            writes.setdefault((case.non_pertinent, "hash set: NSRL (known software)"),
+                              []).append(digest)
+
+    # One write -- and one undo batch -- per category and set, not per file
+    # (v2026.11.337): a pass over a phone made thousands of one-file batches,
+    # which pushed every grading of the examiner's out of what Undo keeps.
+    # Each is written only where the file is still undecided when the write
+    # is made, under the case's own lock (CaseDB.set_category): the examiner
+    # may have graded it since `decisions` was read.
+    for (code, by), digests in writes.items():
+        wrote = case.set_category(digests, code, by=by, only_if_undecided=True)
+        if wrote:
+            changed += wrote
+            counts[code] = counts.get(code, 0) + wrote
 
     if changed:
         with JOBS_LOCK:
