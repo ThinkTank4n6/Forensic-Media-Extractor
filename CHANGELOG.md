@@ -4,6 +4,30 @@ The release number is in `VERSION` and is reported by both GUIs, the console
 banner, and the Project VIC and LAVA exports, so a report can be traced back
 to the build that produced it.
 
+## v2026.11.339 — Files found during a run are drawn even when the finds stop
+
+GitHub's Python 3.12 job failed `test_browser_live_gallery` on
+v2026.11.338: watching a run, it saw no tiles at any moment until the run
+had ended. Two things, one in the test and one in the page:
+
+- **The test's run was too short for what it watched.** A running job reads
+  the files it has found into the page at most every 4 seconds. On GitHub's
+  runner the whole carve of the test's image took about that long, so the
+  first read landed at the end. It had passed before only by printing "not
+  checked: the run finished too quickly here to watch"; this time the run
+  lasted just long enough to be watched, and not long enough to show
+  anything. The interval is now `FME_LIVE_REFRESH` (4 s unless set), and the
+  test sets it to half a second, so the live gallery is checked on every
+  machine.
+- **The page could hold files and never draw them while the run went on.**
+  It redraws at most every 3 seconds during a run, and only when a poll
+  *brought* new files. A batch that arrived just after a redraw, followed by
+  a long stretch with no finds -- minutes of empty disk are common -- was
+  held and not shown until the run ended. It now redraws whenever it holds
+  files it has not drawn and the last draw is 3 seconds old. The test's
+  check now allows the 3-second redraw and nothing more: what the page held
+  at one look must be on screen four seconds later.
+
 ## v2026.11.338 — The other tool's 2026.5.8 audited; newer readers, FAT32 deleted files, damaged E01 chunks
 
 The other tool released 2026.5.8 today. Compared with its previous release

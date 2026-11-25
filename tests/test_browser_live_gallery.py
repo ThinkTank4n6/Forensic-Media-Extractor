@@ -84,7 +84,11 @@ del blob
 server = subprocess.Popen(
     [sys.executable, "-m", "fme", "gui", "--port", str(PORT), "--no-browser"],
     cwd=PROJECT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-    env=dict(os.environ, FME_PAGED_THRESHOLD=str(10 ** 9)))
+    # Files are read into the page every 4 s while a run goes; this image is
+    # carved in about that on GitHub's runner, which then showed nothing
+    # until the end and failed (v2026.11.338). Half a second here, so the
+    # live gallery is watched on every machine, not only on slow ones.
+    env=dict(os.environ, FME_PAGED_THRESHOLD=str(10 ** 9), FME_LIVE_REFRESH="0.5"))
 try:
     for _ in range(150):
         try:
@@ -153,9 +157,17 @@ try:
         else:
             check("tiles appear while the run goes on",
                   any(s["tiles"] > 0 for s in during))
-            check("every file the page holds is shown",
-                  all(s["tiles"] == min(s["held"], 1500) for s in during if s["held"]),
-                  "; ".join(f"{s['held']} held, {s['tiles']} shown" for s in during[-3:]))
+            # The page draws at most every 3 s while a run goes, so what it
+            # shows may trail what it holds by that much -- and no more: what
+            # was held at one look is shown four looks (4 s) later. A batch
+            # held and never drawn until the run ended passed the check this
+            # replaced, whenever files arrived only every 4 s (v2026.11.338).
+            lagging = [(i, during[i - 4]["held"], s["tiles"]) for i, s in enumerate(during)
+                       if i >= 4 and s["tiles"] < min(during[i - 4]["held"], 1500)]
+            check("every file the page holds is shown within a few seconds",
+                  not lagging,
+                  "; ".join(f"look {i}: {h} held 4 s before, {t} shown" for i, h, t in lagging[:3])
+                  or "; ".join(f"{s['held']} held, {s['tiles']} shown" for s in during[-3:]))
             check("the case's 10 categories are on the bar while it runs",
                   all(s["categories"] == 10 for s in during[2:]),
                   ", ".join(str(s["categories"]) for s in during))

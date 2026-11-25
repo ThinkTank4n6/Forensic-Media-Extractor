@@ -1,7 +1,7 @@
 
 // When the gallery was last redrawn during a run, and whether what it
 // is showing is a window onto a larger set.
-let lastLiveDraw = 0;
+let lastLiveDraw = 0, liveDrawn = -1;
 // The job whose files the page has been building during a run, so a new
 // run starts its own list rather than adding to the last one's.
 let liveFor = null;
@@ -714,12 +714,18 @@ async function poll() {
           render();
         }
       } else if (d.files_from !== undefined) {
-        if (liveFor !== jobId || d.files_reset) { files = []; liveFor = jobId; }
+        if (liveFor !== jobId || d.files_reset) { files = []; liveFor = jobId; liveDrawn = -1; }
         files = files.slice(0, d.files_from).concat(d.files || []);
         liveTotal = d.files_known || files.length;
+        // Drawn whenever files are held that are not drawn yet and the last
+        // draw is 3 s old -- not only when this poll brought some
+        // (v2026.11.338). A batch that came just after a draw, followed by a
+        // long stretch with no finds, was held and not shown until the run
+        // ended.
         const now = Date.now();
-        if (d.files && d.files.length && (!lastLiveDraw || now - lastLiveDraw > 3000)) {
+        if (files.length !== liveDrawn && (!lastLiveDraw || now - lastLiveDraw > 3000)) {
           lastLiveDraw = now;
+          liveDrawn = files.length;
           render();
         }
         // Still catching up: ask again at once rather than in 600 ms.

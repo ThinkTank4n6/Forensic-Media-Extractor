@@ -546,6 +546,9 @@ def _release_case(out_dir: str) -> bool:
 CUSTOM_SIGNATURES = []
 SIG_LOCK = threading.Lock()
 
+# How often a running job reads the files it has found into the page.
+LIVE_REFRESH_SECONDS = float(os.environ.get("FME_LIVE_REFRESH") or 4.0)
+
 # .json: a Project VIC export with its media beside it opens as a case.
 IMAGE_EXTENSIONS = {".img", ".dd", ".raw", ".e01", ".e02", ".ex01", ".l01",
                     ".json",
@@ -2391,9 +2394,12 @@ def api_start():
                 if stats:
                     JOBS[job_id]["counts"] = media_core.live_counts(stats)
             # Re-reading a growing manifest is cheap but not free, so at most
-            # once every few seconds.
+            # once every few seconds. FME_LIVE_REFRESH shortens it for a
+            # test whose whole run is seconds long: at 4 s, GitHub's runner
+            # carved the live-gallery test's image in one interval and the
+            # page saw nothing until the end (v2026.11.338).
             now = time.time()
-            if now - live["at"] >= 4.0:
+            if now - live["at"] >= LIVE_REFRESH_SECONDS:
                 live["at"] = now
                 refresh_files()
 
