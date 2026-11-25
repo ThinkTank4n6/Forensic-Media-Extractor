@@ -1007,7 +1007,14 @@ OPEN_CACHE = ".fme_files_cache.json"
 def _opening(job_id: str, **changes) -> None:
     with OPENING_LOCK:
         if job_id in OPENING:
-            OPENING[job_id].update(changes)
+            entry = OPENING[job_id]
+            # Every stage passed, in order, as well as the one now: a stage
+            # over in a few milliseconds -- the kept file list read back --
+            # fell between two looks and was never seen (v2026.11.340).
+            stage = changes.get("stage")
+            if stage and (entry.get("stages") or [None])[-1] != stage:
+                entry.setdefault("stages", []).append(stage)
+            entry.update(changes)
 
 
 def _open_cache_key(manifest_path: str) -> dict:
@@ -1237,7 +1244,8 @@ def _open_case_in_background(out_dir: str, job_id: str) -> None:
         for stale in [k for k, v in OPENING.items()
                       if v.get("ready") and now - v.get("finished", now) > OPENING_KEPT]:
             OPENING.pop(stale, None)
-        OPENING[job_id] = {"stage": "Starting", "done": 0, "total": 0,
+        OPENING[job_id] = {"stage": "Starting", "stages": ["Starting"],
+                           "done": 0, "total": 0,
                            "unit": "", "ready": False, "error": None,
                            "out_dir": out_dir, "started": time.time()}
 

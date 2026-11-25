@@ -4,6 +4,19 @@ The release number is in `VERSION` and is reported by both GUIs, the console
 banner, and the Project VIC and LAVA exports, so a report can be traced back
 to the build that produced it.
 
+## v2026.11.340 — An opening case keeps the list of stages it passed through
+
+GitHub's Python 3.11 job failed `test_case_open_progress` on v2026.11.339:
+on the second open of a case, the check that its kept file list was read
+back did not see the stage "Reading the case's prepared file list". The open
+had used the list -- the slow stages that read the manifest instead were
+absent too -- but the test looked at the stage every 20 ms, and on GitHub's
+runner that stage began and ended between two looks.
+
+The opening state now keeps `stages`, every stage passed in order, beside
+the one now (`_opening`), and the test reads that record rather than what
+its own looks happened to catch.
+
 ## v2026.11.339 — Files found during a run are drawn even when the finds stop
 
 GitHub's Python 3.12 job failed `test_browser_live_gallery` on

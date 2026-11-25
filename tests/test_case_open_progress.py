@@ -61,7 +61,11 @@ def open_in_background():
             stages.append(state["stage"])
             last = state["stage"]
         if state.get("ready"):
-            return started, state, stages
+            # The server's own record of every stage, not only those this
+            # loop happened to look at: on GitHub's runner the kept list was
+            # read back between two looks 20 ms apart, and this check failed
+            # though the open had used it (v2026.11.340).
+            return started, state, state.get("stages") or stages
         time.sleep(0.02)
     return started, {}, stages
 
