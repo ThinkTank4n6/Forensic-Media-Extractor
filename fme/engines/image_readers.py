@@ -652,7 +652,45 @@ class VendorImageReader(ImageReader):
         # the seek and the read have to happen together.
         with self._lock:
             self._image.seek(offset)
-            return self._image.read(length)
+            zeros_before = getattr(self._image, "padded_zeros_read", 0)
+            data = self._image.read(length)
+            self._note_damage(offset, len(data), zeros_before)
+            return data
+
+    def _note_damage(self, offset: int, got: int, zeros_before: int) -> None:
+        """Log a read that the acquisition's own checks do not vouch for.
+
+        An E01 keeps an Adler-32 for every chunk, and the reader checks each
+        as it decodes it (``checksum_errors``); a chunk whose stored data ran
+        out is read with zeros after what it gave (``padded_zeros_read``).
+        Both were the reader's to know and nothing here asked: a picture read
+        through such a chunk was stored as if whole and sound. Logged per
+        read, as the device reader logs a zero-filled sector, so whatever
+        stores a file can ask what its own bytes went through
+        (fs_walk._zero_after_read). v2026.11.338, after the other tool began
+        refusing such files.
+        """
+        img = self._image
+        size = int(getattr(img, "chunk_size", 0) or 0)
+        errors = getattr(img, "checksum_errors", None) or ()
+        what = []
+        if size and errors and got:
+            first, last = offset // size, (offset + got - 1) // size
+            if len(errors) != getattr(self, "_damaged_seen", -1):
+                self._damaged_set = set(errors)
+                self._damaged_seen = len(errors)
+            bad = sorted(c for c in self._damaged_set if first <= c <= last)
+            if bad:
+                what.append(f"chunk(s) {', '.join(f'{c:,}' for c in bad[:5])}"
+                            + (" and more" if len(bad) > 5 else "")
+                            + " fail their stored checksum")
+        padded = getattr(img, "padded_zeros_read", 0) - zeros_before
+        if padded > 0:
+            what.append(f"{padded:,} byte(s) were zeros put where a chunk's "
+                        f"stored data ran out")
+        if what:
+            self.__dict__.setdefault("damage_log", []).append(
+                (offset, got, "; ".join(what)))
 
     def close(self) -> None:
         try:
@@ -688,6 +726,10 @@ class FileObjectReader(ImageReader):
 # Containers the vendored reader opens that nothing else here does.
 VENDOR_ONLY_EXTENSIONS = {
     ".aff", ".aff4", ".afm", ".afd", ".dmg", ".dmgpart", ".sparseimage",
+    # Apple Sparse Image Format, macOS 26 and later: read since ewfprobe
+    # 0.17 (v2026.11.338). Opened as raw bytes before, it was carved as
+    # one, with nothing in it walked.
+    ".asif",
     ".ad1", ".vhd", ".vhdx", ".qcow", ".qcow2", ".qed",
 }
 

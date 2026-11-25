@@ -325,6 +325,20 @@ support set in **File → Settings**:
 
 Send back the What is installed text and the times.
 
+## Session I — an Apple Sparse Image (ASIF), ten minutes, on a Mac
+
+FME reads `.asif` images (macOS 26 and later) through the vendored reader
+since v2026.11.338. No ASIF image is in this repository, so FME has only
+checked that an `.asif` goes to that reader, not that a real one reads.
+
+1. On a Mac with macOS 26: `diskutil image create blank --fs APFS --size 1g
+   --format ASIF test.asif`, mount it, copy in a few photos, eject it.
+2. Run FME on `test.asif`.
+3. The photos should come back **by name, from the file system** — not only
+   from the carve with no names.
+
+Send back the manifest.csv.
+
 ## Session F — not a computer task
 
 Give `docs/VALIDATION.md` §5 to somebody in the unit who did **not**

@@ -55,7 +55,9 @@ from fme.engines.length_parsers import (  # noqa: F401
     sniff_category, ts,
 )
 from fme.engines.fs_walk import (  # noqa: F401
-    _fat_folder_children, _fat_free_run, _fat_overwrite_note, _list_folder,
+    CONTENT_UNVERIFIED, _fat_first_cluster_ambiguous, _fat_folder_children,
+    _fat_free_run,
+    _fat_overwrite_note, _list_folder,
     _open_fat_volumes, _partition_offsets, _short_after_read, _shown_deleted,
     _volume_entry, _zero_after_read, _zero_mark, is_fs_metadata,
     tsk_kinds,
@@ -359,7 +361,7 @@ def _mft_note(record: dict, how: str, stats: Optional[dict]) -> str:
             "it" if how == "resident" else
             "recovered from a deleted MFT record; the content was "
             "read from clusters the file system had released, so it "
-            "is what is there now")
+            "is what is there now" + CONTENT_UNVERIFIED)
     if record.get("data_flags", 0) & getattr(ntfs_mft, "DATA_COMPRESSED", 0):
         note += "; NTFS-compressed, decompressed as Windows reads it"
     if record.get("undecodable"):
@@ -429,6 +431,14 @@ def run_fat_deleted_recovery(reader, out: OutputManager, args, stats: dict,
                 continue
             if entry.size > getattr(args, "max_file_size", 1 << 32):
                 continue
+            if _fat_first_cluster_ambiguous(volume, entry):
+                stats["fat_deleted_first_cluster_lost"] = stats.get(
+                    "fat_deleted_first_cluster_lost", 0) + 1
+                LOG.info("deleted %s: its first cluster's high half reads zero on "
+                         "a FAT32 volume of 0x10000 clusters or more, so its first "
+                         "cluster is not known and it is not recovered from "
+                         "clusters", entry.name)
+                continue
             # Deleting a file frees its chain, so the FAT says nothing about
             # where the rest of it was. The clusters are usually contiguous,
             # so the file is read straight on from its first cluster for the
@@ -485,7 +495,7 @@ def run_fat_deleted_recovery(reader, out: OutputManager, args, stats: dict,
             fat_deleted_note = ("recovered from a deleted directory entry, which kept "
                       "the name, the first cluster and the size; the content "
                       "was read from clusters the file system had released, "
-                      "so it is what is there now"
+                      "so it is what is there now" + CONTENT_UNVERIFIED
                       + ("; the chain was freed, so the bytes were read "
                          "straight through from the first cluster, which "
                          "assumes the file was not fragmented")
@@ -619,6 +629,8 @@ def run_exfat_deleted_recovery(image_path: str, out: "OutputManager", args,
                           "which kept the whole name, the first cluster and "
                           "the length; the content was read from clusters "
                           "the volume had released, so it is what is there now"
+                          + (CONTENT_UNVERIFIED
+                             if getattr(entry, "content_unverified", True) else "")
                           + ("; the file was written in one run (NoFatChain), "
                              "so it was read straight on from its first cluster"
                              if not entry.assumed_contiguous else "")

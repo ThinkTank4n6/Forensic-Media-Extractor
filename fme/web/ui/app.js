@@ -2630,7 +2630,11 @@ async function showDetails(relPath) {
         `target="_blank" rel="noreferrer">` +
         `open in a map</a> <span class="none">(leaves this machine)</span></td></tr>`) +
       row("Recovered by", `${r.engine} (${r.signature})`) +
-      row("Deleted", r.deleted ? "yes" : "no") +
+      // The reader's own caution, where its note carries it (v2026.11.338):
+      // bytes read from released clusters are a candidate, not proven.
+      row("Deleted", !r.deleted ? "no"
+          : /Content unverified/.test(r.note || "") ? "yes — content unverified (see the note)"
+          : "yes") +
       row("FS created", inZone(r.crtime || r.ctime)) +
       row("FS written", inZone(r.mtime)) +
       row("FS accessed", inZone(r.atime)) +

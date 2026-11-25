@@ -208,7 +208,8 @@ from fme.engines.fs_walk import (  # noqa: F401
     DELETED_FOLDER_MAX_CLUSTERS, FS_TYPE_NAMES, _BAD_SHORT_NAME, _FS_METADATA,
     _ReaderSource, _TSKImg, _TSK_KINDS, _TSK_NAME_FLAG_UNALLOC,
     _ZeroNoted, _deleted_folder_readable, _embedded_target, _fat32_all_files,
-    _fat32_chunks, _fat32_walk, _fat_folder_children, _fat_free_run,
+    _fat32_chunks, _fat32_walk, _fat_first_cluster_ambiguous, _fat_folder_children,
+    _fat_free_run,
     _fat_overwrite_note, _fat_volumes, _fs_chunks, _list_folder,
     _logical_partitions, _looks_like_folder, _looks_like_volume, _mbr_sector_size,
     _name_on_reused_record, _name_unallocated, _note_unread, _open_fat32,
@@ -594,7 +595,7 @@ DEFAULT_OPTIONS = {
 ACQUISITION_EXTENSIONS = {
     ".e01", ".ex01", ".s01", ".l01", ".lx01", ".aff", ".aff4", ".afm",
     ".ad1", ".dd", ".raw", ".img", ".dmg", ".vhd", ".vhdx", ".vmdk",
-    ".qcow", ".qcow2", ".001", ".ufdr", ".tar", ".zip",
+    ".qcow", ".qcow2", ".001", ".ufdr", ".tar", ".zip", ".asif", ".sparseimage",
 }
 
 

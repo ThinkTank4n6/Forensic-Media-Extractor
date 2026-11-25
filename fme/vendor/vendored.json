@@ -3,28 +3,28 @@
     {
       "path": "qnxprobe.py",
       "name": "qnxprobe",
-      "version": "1.80",
+      "version": "1.88",
       "upstream": "https://github.com/abrignoni/qnxprobe",
-      "sha256": "d55d5354959ab688da3cc950b4aa01ed6d8b17fcb3ce7ed99d932da4a6016353",
+      "sha256": "64abc361ee1f68761831207ba00fd98b7627da02b7a9accf28cffca1cd7c1893",
       "licence": "MIT",
       "licence_file": "LICENSE-qnxprobe",
-      "note": "Reads the file systems the rest of this program cannot: QNX6, QNX4, ETFS, EFS, QNX IFS, F2FS, SquashFS, JFFS2, UBI/UBIFS, YAFFS1/2, Btrfs, XFS, ReFS and more. Copied verbatim from the 1.80 release archive; fix upstream and re-vendor rather than editing here.",
+      "note": "Reads the file systems the rest of this program cannot: QNX6, QNX4, ETFS, EFS, QNX IFS, F2FS, SquashFS, JFFS2, UBI/UBIFS, YAFFS1/2, Btrfs, XFS, ReFS and more. Copied verbatim from the 1.88 release; fix upstream and re-vendor rather than editing here.",
       "copyright": "Copyright (c) 2026 Alexis Brignoni",
       "notice_in_file": true,
-      "received": "2026-11-18: release archive the author issued, copied verbatim"
+      "received": "2026-11-24: from GLEAPP 2026.5.8 (qnxprobe commit 542f704, 2026-11-24), copied verbatim"
     },
     {
       "path": "ewfprobe.py",
       "name": "ewfprobe",
-      "version": "0.15.1",
+      "version": "0.17.3",
       "upstream": "https://github.com/abrignoni/ewfprobe",
-      "sha256": "f596b57072ec9fbb555d1d1439851a030b2b99c6c370f11b71a48226797b4017",
+      "sha256": "5b799d606bd74bf16ce801c6ccfee8c200c111248d745095d4d61e9fcdba7025",
       "licence": "MIT",
       "licence_file": "LICENSE-ewfprobe",
       "note": "Reads an EnCase/EWF .E01 acquisition without libewf. Copied verbatim; fix upstream and re-vendor rather than editing here.",
       "copyright": "Copyright (c) 2026 Alexis Brignoni",
       "notice_in_file": false,
-      "received": "2026-11-18: release archive the author issued, copied verbatim"
+      "received": "2026-11-24: from GLEAPP 2026.5.8 (ewfprobe commit 71bd658, 2026-11-22), copied verbatim"
     },
     {
       "path": "LICENSE-qnxmount",

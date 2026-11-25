@@ -379,6 +379,17 @@ def walk_filesystem(fs, out: OutputManager, *, fs_label: str, part_label: str,
                            "classified by file name; the header did not match a "
                            "known format, so this may be truncated, overwritten "
                            "or not media at all")
+                if deleted:
+                    # TSK says nothing here of whether an NTFS file's data
+                    # was resident in its MFT record, where nothing can have
+                    # overwritten it, so that case is named rather than
+                    # left out (v2026.11.338).
+                    fs_note = ((fs_note + "; " if fs_note else "")
+                               + "deleted, listed by The Sleuth Kit"
+                               + CONTENT_UNVERIFIED
+                               + (" -- unless the data was resident in the MFT "
+                                  "record, which cannot have been overwritten"
+                                  if "ntfs" in str(fs_label).lower() else ""))
                 fs_got: dict = {}
                 rec = out.store(
                     _fs_chunks(entry, meta.size, got=fs_got),
@@ -509,20 +520,45 @@ def _salvaging_reader(reader):
     return None
 
 
+def _damage_reader(reader):
+    """The acquisition reader under `reader` that logs reads its own
+    checksums do not vouch for (VendorImageReader over an E01), or None --
+    found through the same wrappers as `_salvaging_reader`."""
+    for _ in range(6):
+        if reader is None:
+            return None
+        if callable(getattr(type(reader), "_note_damage", None)):
+            return reader
+        reader = (getattr(reader, "_inner", None) or getattr(reader, "_r", None)
+                  or getattr(reader, "_rdr", None))
+    return None
+
+
 def _zero_mark(reader):
-    """Where the reader's zero-fill log stands now. Taken before a file's
-    bytes are read; `_zero_after_read` asks what was zero-filled since."""
+    """Where the reader's zero-fill log -- and its damage log -- stand now.
+    Taken before a file's bytes are read; `_zero_after_read` asks what was
+    zero-filled, or read through a damaged chunk, since."""
     src = _salvaging_reader(reader)
-    if src is None:
+    dsrc = _damage_reader(reader)
+    if src is None and dsrc is None:
         return None
-    return src, len(src.__dict__.get("zero_log") or ())
+    return (src, len(src.__dict__.get("zero_log") or ()) if src is not None else 0,
+            dsrc, len(dsrc.__dict__.get("damage_log") or ()) if dsrc is not None else 0)
 
 
 def _zero_filled_since(mark) -> list:
-    if not mark:
+    if not mark or mark[0] is None:
         return []
-    src, at = mark
+    src, at = mark[0], mark[1]
     return list((src.__dict__.get("zero_log") or ())[at:])
+
+
+def _damaged_since(mark) -> list:
+    """(offset, length, what) of every read since `mark` that went through
+    a chunk failing its stored checksum, or one padded with zeros."""
+    if not mark or len(mark) < 4 or mark[2] is None:
+        return []
+    return list((mark[2].__dict__.get("damage_log") or ())[mark[3]:])
 
 
 def _zero_after_read(mark, note: str, stats: Optional[dict], inner=None):
@@ -546,6 +582,24 @@ def _zero_after_read(mark, note: str, stats: Optional[dict], inner=None):
     """
     def after_read(size: int) -> dict:
         changes = dict((inner(size) if inner is not None else None) or {})
+        damaged = _damaged_since(mark)
+        if damaged:
+            # Kept and said, not dropped: the carve would find the bytes
+            # again with no name, and an examiner is better served by the
+            # file with its damage stated than by its absence.
+            if stats is not None:
+                stats["damaged_source_files"] = stats.get("damaged_source_files", 0) + 1
+            what = sorted({text for _, _, text in damaged})
+            places = ", ".join(f"{start:,}" for start, _, _ in damaged[:5])
+            LOG.warning("a stored file was read through damaged acquisition data "
+                        "at source offset(s) %s: %s", places, "; ".join(what[:3]))
+            base = changes.get("note", note)
+            changes["note"] = (
+                ((base + "; ") if base else "")
+                + f"DAMAGED SOURCE: this file was read through acquisition data "
+                  f"its own checks do not vouch for ({'; '.join(what[:3])}, at "
+                  f"source offset(s) {places}), so its bytes and hashes may not "
+                  f"be the original's")
         filled = _zero_filled_since(mark)
         if not filled:
             return changes
@@ -828,6 +882,13 @@ def _fat32_walk(fs, part_label: str, args, out: OutputManager, stats: dict,
             # that, the bytes belong to something written since. See
             # _fat_free_run.
             readable, overwrite_note = entry.size, ""
+            if _fat_first_cluster_ambiguous(fs, entry):
+                # Its first cluster's high half reads zero on a volume where
+                # that leaves it unknown: read from the low half alone, it
+                # came back as another file's bytes (v2026.11.338).
+                stats["fat_deleted_first_cluster_lost"] = stats.get(
+                    "fat_deleted_first_cluster_lost", 0) + 1
+                continue
             if entry.is_deleted:
                 needed, free = _fat_free_run(fs, entry.first_cluster,
                                              entry.size)
@@ -883,7 +944,7 @@ def _fat32_walk(fs, part_label: str, args, out: OutputManager, stats: dict,
             if entry.is_deleted:
                 stem = "deleted_" + stem
             fat_note = ("deleted entry, read contiguously from first cluster"
-                        + overwrite_note
+                        + overwrite_note + CONTENT_UNVERIFIED
                         if entry.is_deleted
                         else "recovered via fat32_core (pytsk3 not installed)")
             fat_got: dict = {}
@@ -1002,6 +1063,46 @@ def _fat_free_run(volume, first: int, size: int) -> tuple:
             break
         free += 1
     return needed, free
+
+
+# Said of every deleted file whose bytes were read from released clusters
+# (v2026.11.338). A cluster the volume shows as free may since have held a
+# later file that was deleted in turn, and once that file's own entry is
+# gone too, nothing on the volume records it: the bytes are a candidate for
+# the deleted file, not proven to be its own. The other tool's qnxprobe 1.88
+# labels its FAT32 and exFAT recoveries so; the limit is the same for FAT,
+# exFAT and NTFS data outside the MFT record, so all three say it here.
+CONTENT_UNVERIFIED = (". Content unverified: a later file may have used those "
+                      "clusters and been deleted in turn, and once its own entry "
+                      "is gone too nothing on the volume shows it, so these bytes "
+                      "are a candidate for this file, not proven to be its own")
+
+
+def _fat_first_cluster_ambiguous(volume, entry) -> bool:
+    """Whether a deleted FAT32 entry's first cluster cannot be trusted.
+
+    FAT32 keeps a file's first cluster in two halves of its entry, and
+    deleting it clears the high half on Windows (Carrier, File System
+    Forensic Analysis, ch. 10). On a volume of 0x10000 clusters or more, an
+    entry whose high half reads zero may have lost it, and the low half then
+    names several clusters: low, low + 0x10000, and so on. Read from the
+    first of them, another file's leftover bytes came back under this file's
+    name whenever that cluster happened to be free (v2026.11.338, after the
+    other tool's qnxprobe 1.88).
+
+    Refused unless the low half can only mean one cluster on this volume.
+    An entry inside a deleted folder that is not itself marked deleted kept
+    its high half, and is not affected.
+    """
+    if getattr(volume.bs, "fat_type", "") != "FAT32" or not entry.is_deleted:
+        return False
+    first = int(entry.first_cluster or 0)
+    if first >= 0x10000:
+        return False                     # the high half survived
+    bs = volume.bs
+    data_sectors = max(0, bs.total_sectors - bs.first_data_sector)
+    limit = min(len(volume.fat), data_sectors // max(1, bs.sectors_per_cluster) + 2)
+    return first + 0x10000 < limit
 
 
 def _fat_overwrite_note(volume, first: int, needed: int, free: int) -> str:

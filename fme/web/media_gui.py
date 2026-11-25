@@ -549,7 +549,11 @@ SIG_LOCK = threading.Lock()
 # .json: a Project VIC export with its media beside it opens as a case.
 IMAGE_EXTENSIONS = {".img", ".dd", ".raw", ".e01", ".e02", ".ex01", ".l01",
                     ".json",
-                    ".001", ".bin", ".vmdk", ".vhd", ".vhdx", ".qcow", ".qcow2"}
+                    ".001", ".bin", ".vmdk", ".vhd", ".vhdx", ".qcow", ".qcow2",
+                    # The rest the vendored reader opens: picked out in the
+                    # file chooser like the others (v2026.11.338).
+                    ".lx01", ".s01", ".aff", ".aff4", ".ad1", ".dmg",
+                    ".sparseimage", ".asif"}
 
 DEFAULT_IMAGE_PATH = ""
 

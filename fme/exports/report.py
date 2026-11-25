@@ -623,6 +623,23 @@ def coverage_limits(manifest: dict) -> list:
             f"({_size(summary.get('zero_filled_bytes') or 0)} in all). Each is "
             f"marked bounded \"short\" and its note says ZERO-FILLED and gives "
             f"the source offsets; its digest is not that of the original file.")
+    if summary.get("damaged_source_files"):
+        limits.append(
+            f"{summary['damaged_source_files']} file(s) were read through "
+            f"acquisition data the acquisition's own checks do not vouch for -- "
+            f"an E01 chunk that fails its stored checksum, or one whose stored "
+            f"data ran out and was read as zeros. Each is kept, and its note "
+            f"says DAMAGED SOURCE and names the chunk and the source offset; "
+            f"its bytes and digest may not be the original file's.")
+    if summary.get("fat_deleted_first_cluster_lost"):
+        limits.append(
+            f"{summary['fat_deleted_first_cluster_lost']} deleted FAT32 file(s) "
+            f"were not recovered by name: the high half of each one's first "
+            f"cluster reads zero, which Windows writes when it deletes a file, "
+            f"and on a volume this size the low half alone names more than one "
+            f"cluster. Read from the wrong one, another file's bytes would have "
+            f"come back under its name. Their content, where it survives, is "
+            f"found by the carve, without a name.")
     # Things the run passed over and counted. Each used to be silent; a
     # report that leaves them out says less was missed than was.
     passed_over = [

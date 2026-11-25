@@ -516,3 +516,48 @@ what closed them, so they are not reopened by mistake.
   one result as a fixed "True"; it now waits for the state each check
   needs, and passed with the machine's core oversubscribed two to one,
   where the previous version failed.
+
+## The other tool's 2026.5.8 (2026-11-24), against FME v2026.11.337
+
+Compared file by file with its previous release (2026.5.7, received
+2026-11-18). Twenty-five files changed and four were added, all of it in
+three places:
+
+1. **The two readers FME vendors from it.** qnxprobe 1.80 to 1.88 (39,515
+   lines to 63,942) and ewfprobe 0.15.1 to 0.17.3. qnxprobe now checks a
+   volume's allocation against what its records claim, finds clusters two
+   files claim, refuses a deleted FAT32 entry whose first cluster lost its
+   high half, and labels every FAT32 and exFAT deleted recovery
+   `content_unverified`. ewfprobe adds Apple's ASIF images, a fuller L01 and
+   Lx01 file tree (names through parents, each entry's times) and per-entry
+   damage reporting. **Re-vendored in v2026.11.338**, byte for byte; no name
+   FME calls was removed.
+2. **Logical evidence.** It refused L01, Lx01 and AD1 before and reads them
+   now, each file checked against the hash the evidence stores. FME has
+   done that since v2026.11.315 (`sources.run_logical_entries`); the newer
+   ewfprobe's tree reaches FME with the re-vendoring.
+3. **Damaged acquisition data.** A file read through an E01 chunk that
+   fails its stored checksum is refused there. FME stored it as sound and
+   said nothing. **Now it keeps it and says DAMAGED SOURCE** in the file's
+   note, naming the chunk and offset, and the report counts them: the carve
+   would find the bytes again with no name, so keeping the file with its
+   damage stated serves an examiner better than its absence.
+
+What FME took besides the readers (v2026.11.338):
+
+- **The FAT32 high-half rule, in FME's own FAT code.** FME's deleted-entry
+  pass and its FAT walk had the defect qnxprobe fixed: the first cluster
+  was taken as written, and on a volume of 0x10000 clusters or more a
+  deleted entry whose high half Windows had cleared was read from the wrong
+  cluster, storing another file's bytes under its name.
+  `tests/test_fat32_high_word.py` failed before and passes after.
+- **"Content unverified"** on every deleted file read from released
+  clusters -- FAT, exFAT, NTFS data outside the MFT record, and TSK's
+  listing -- in the note, and in the details pane next to "Deleted".
+- **ASIF** routed to the vendored reader (routing only proven:
+  `docs/EXAMINER_TASKS.md` Session I).
+
+Not taken: its `archive.py` staging and relinking of logical evidence (FME
+does not stage), its report and LAVA wording (FME's are its own), and its
+test fixtures other than the E01 writer (`tests/ewfwriter.py`).
+

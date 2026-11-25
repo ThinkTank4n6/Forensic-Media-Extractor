@@ -4,6 +4,39 @@ The release number is in `VERSION` and is reported by both GUIs, the console
 banner, and the Project VIC and LAVA exports, so a report can be traced back
 to the build that produced it.
 
+## v2026.11.338 — The other tool's 2026.5.8 audited; newer readers, FAT32 deleted files, damaged E01 chunks
+
+The other tool released 2026.5.8 today. Compared with its previous release
+file by file (docs/AUDIT.md, "The other tool's 2026.5.8"); what it does
+better is now in FME:
+
+- **qnxprobe 1.88 and ewfprobe 0.17.3**, re-vendored byte for byte (1.80 and
+  0.15.1 before).
+- **A deleted FAT32 file is no longer read from the wrong cluster.** FAT32
+  keeps a first cluster in two halves, and Windows clears the high half when
+  it deletes a file. On a volume of 0x10000 clusters or more -- any SD card
+  or stick of a few gigabytes -- FME read such a file from the low half
+  alone, and when that cluster was free it stored **another file's bytes
+  under the deleted file's name**, with its dates. Refused now, in the
+  deleted-entry pass and in the FAT walk, unless the low half can mean only
+  one cluster; counted, and said in the report. The bytes, where they
+  survive, are still found by the carve. `tests/test_fat32_high_word.py`.
+- **Content unverified.** Every deleted file read from clusters the volume
+  had released now says, in its note, that a later file may have used those
+  clusters and been deleted in turn, so the bytes are a candidate, not
+  proven. The details pane shows "Deleted: yes — content unverified". NTFS
+  data resident in the MFT record, which nothing can have overwritten, does
+  not say it.
+- **DAMAGED SOURCE.** A file read out of an E01 through a chunk that fails
+  its stored checksum, or one whose stored data ran out, was stored as
+  sound. It is kept and its note now says DAMAGED SOURCE, with the chunk and
+  offset; the report counts them. `tests/test_e01_chunk_damage.py`, with the
+  other tool's E01 writer brought into the tests (`tests/ewfwriter.py`).
+- **ASIF**, Apple's disk image format since macOS 26, goes to the vendored
+  reader rather than being carved as raw bytes; the file chooser picks out
+  it and the other acquisitions the vendored reader opens. Only the routing
+  is proven here: `docs/EXAMINER_TASKS.md` Session I is the real check.
+
 ## v2026.11.337 — Ctrl-Z puts a page back the way it was, with the hash store running
 
 Reported: grading a page of 500 from 8 (Uncategorized) and pressing 2 by
