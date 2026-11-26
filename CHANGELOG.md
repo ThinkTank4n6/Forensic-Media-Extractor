@@ -4,6 +4,32 @@ The release number is in `VERSION` and is reported by both GUIs, the console
 banner, and the Project VIC and LAVA exports, so a report can be traced back
 to the build that produced it.
 
+## v2026.11.341 — Every picture feature reads what the gallery shows: HEIC, Apple textures, CgBI PNGs
+
+GitHub's Python 3.11 job failed the button sweep (`test_ui_sweep`) on
+v2026.11.340. Gallery order is not fixed, and there the first tile -- the one
+the sweep selects -- was `snapshot.ktx`, an Apple GPU texture the gallery
+draws through FME's texture decoder. "Others like this" then said the
+picture "could not be described by the model", and "Find edited copies"
+that it "would not decode".
+
+The test had found a real defect. Edit matching, content search ("Others
+like this"), face search and screening each read pictures with OpenCV's own
+decoder, never with the opener the gallery uses (`imaging.open_image`).
+OpenCV reads no GPU texture, reads a CgBI PNG (Apple's altered PNG, common
+in iOS app folders) as black, and reads **no HEIC -- every photograph an
+iPhone takes**. On an iPhone case those four features could not read most
+of the photos, though the gallery showed them all.
+
+All four now read through `imaging.read_array`: OpenCV first, for
+everything it reads correctly, then the gallery's own opener for the rest.
+`tests/test_decode_like_gallery.py`: a texture, a CgBI PNG and a JPEG are
+each read in color and gray, the CgBI PNG as its own pixels; from the
+texture, edit matching finds both the JPEG and the CgBI copy; and no picture
+feature decodes with OpenCV directly. HEIC goes through the same opener the
+gallery's HEIC tiles do; this workspace has no HEIC plugin, so that format
+is proven on the Windows build, not here.
+
 ## v2026.11.340 — An opening case keeps the list of stages it passed through
 
 GitHub's Python 3.11 job failed `test_case_open_progress` on v2026.11.339:

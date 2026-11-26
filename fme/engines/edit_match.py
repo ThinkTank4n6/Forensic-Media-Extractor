@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import math
 import os
+from fme.engines import imaging
 
 __version__ = "1.0.0"
 
@@ -80,12 +81,10 @@ def _thumbnail(path: str):
     import cv2
     import numpy as np
 
-    try:
-        with open(path, "rb") as fh:
-            blob = np.frombuffer(fh.read(), dtype=np.uint8)
-        picture = cv2.imdecode(blob, cv2.IMREAD_GRAYSCALE)
-    except Exception:  # noqa: BLE001 - a file that will not decode is a fact
-        return None
+    # Through imaging.read_array, which reads HEIC and Apple textures as the
+    # gallery does: "that file would not decode" was said of pictures the
+    # gallery showed (v2026.11.341).
+    picture = imaging.read_array(path, gray=True)
     if picture is None or picture.size == 0:
         return None
     height, width = picture.shape[:2]

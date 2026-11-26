@@ -146,6 +146,7 @@ _loaded = {}
 # setInput and forward, and two searches on the server's threads could each
 # set theirs and read the other's answer -- a wrong vector, no error.
 import threading as _threading  # noqa: E402
+from fme.engines import imaging
 _infer = _threading.Lock()
 _digests: dict = {}
 
@@ -279,14 +280,10 @@ def describe(path: str, model_path: str):
     import cv2
     import numpy as np
 
-    try:
-        with open(path, "rb") as fh:
-            blob = np.frombuffer(fh.read(), dtype=np.uint8)
-        # IMREAD_COLOR applies the EXIF orientation, so a photograph the
-        # phone stored on its side is described the right way up.
-        picture = cv2.imdecode(blob, cv2.IMREAD_COLOR)
-    except Exception:  # noqa: BLE001
-        return None
+    # imaging.read_array applies the EXIF orientation, so a photograph the
+    # phone stored on its side is described the right way up -- and reads
+    # HEIC and Apple textures, as the gallery does (v2026.11.341).
+    picture = imaging.read_array(path)
     if picture is None or picture.size == 0:
         return None
     try:
@@ -305,12 +302,9 @@ def _read_prepared(path: str):
     import cv2
     import numpy as np
 
-    try:
-        with open(path, "rb") as fh:
-            blob = np.frombuffer(fh.read(), dtype=np.uint8)
-        picture = cv2.imdecode(blob, cv2.IMREAD_COLOR)
-    except Exception:  # noqa: BLE001
-        return None
+    # Through imaging.read_array, which reads HEIC and Apple textures as the
+    # gallery does (v2026.11.341).
+    picture = imaging.read_array(path)
     if picture is None or picture.size == 0:
         return None
     return _prepare(picture)

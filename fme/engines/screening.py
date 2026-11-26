@@ -136,7 +136,8 @@ def face_count(path: str) -> int:
         if not os.path.isfile(cascade_path):
             return -1
         cascade = cv2.CascadeClassifier(cascade_path)
-        image = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
+        # imaging.read_array: cv2.imread reads no HEIC and no texture.
+        image = imaging.read_array(path, gray=True)
         if image is None:
             return -1
         found = cascade.detectMultiScale(image, 1.2, 5, minSize=(24, 24))

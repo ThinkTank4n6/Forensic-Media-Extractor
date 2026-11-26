@@ -78,6 +78,7 @@ _tools = {}
 # feature, keep state on the shared objects, and two requests on the
 # server's threads could swap boxes or descriptions (v2026.11.317).
 import threading as _threading  # noqa: E402
+from fme.engines import imaging
 _use = _threading.Lock()
 
 
@@ -113,12 +114,9 @@ def faces_in(path: str, detector_path: str, recognizer_path: str) -> list:
     import cv2
     import numpy as np
 
-    try:
-        with open(path, "rb") as fh:
-            blob = np.frombuffer(fh.read(), dtype=np.uint8)
-        picture = cv2.imdecode(blob, cv2.IMREAD_COLOR)
-    except Exception:  # noqa: BLE001
-        return []
+    # Through imaging.read_array, which reads HEIC and Apple textures as the
+    # gallery does (v2026.11.341).
+    picture = imaging.read_array(path)
     if picture is None or picture.size == 0:
         return []
 
@@ -199,12 +197,9 @@ def _faces_here(path: str, detector_path: str, recognizer_path: str) -> list:
         tools = (key, cv2.FaceDetectorYN_create(detector_path, "", DETECT_SIZE),
                  cv2.FaceRecognizerSF_create(recognizer_path, ""))
         _local.tools = tools
-    try:
-        with open(path, "rb") as fh:
-            blob = np.frombuffer(fh.read(), dtype=np.uint8)
-        picture = cv2.imdecode(blob, cv2.IMREAD_COLOR)
-    except Exception:  # noqa: BLE001
-        return []
+    # Through imaging.read_array, which reads HEIC and Apple textures as the
+    # gallery does (v2026.11.341).
+    picture = imaging.read_array(path)
     if picture is None or picture.size == 0:
         return []
     return _faces(picture, detector_path, recognizer_path, tools[1], tools[2])

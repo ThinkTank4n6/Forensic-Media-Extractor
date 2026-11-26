@@ -138,6 +138,45 @@ def open_image(path: str):
             image.close()
 
 
+def read_array(path: str, gray: bool = False):
+    """A picture as an OpenCV array -- BGR, or grayscale -- or None.
+
+    Edit matching, content and face search and screening each read pictures
+    with OpenCV's own decoder, which reads neither HEIC -- every photograph
+    an iPhone takes -- nor a GPU texture, and reads a CgBI PNG as black. The
+    gallery drew those pictures and each of these then said the picture
+    "would not decode" (v2026.11.341, found by the button sweep landing on
+    a .ktx on GitHub's runner). OpenCV is still asked first for everything
+    it reads correctly; the rest goes through open_image, as a thumbnail
+    does, so a picture the gallery can show is one these can read.
+    """
+    import cv2
+    import numpy as np
+    from fme.engines import textures
+
+    if textures.kind_of_file(path) is None:
+        try:
+            blob = np.fromfile(path, dtype=np.uint8)
+            # IMREAD_COLOR and IMREAD_GRAYSCALE apply the EXIF orientation.
+            picture = cv2.imdecode(blob, cv2.IMREAD_GRAYSCALE if gray
+                                   else cv2.IMREAD_COLOR)
+            if picture is not None and picture.size:
+                return picture
+        except Exception:  # noqa: BLE001 - tried the other way below
+            pass
+    if not PILLOW:
+        return None
+    try:
+        from PIL import ImageOps
+        with open_image(path) as image:
+            image = ImageOps.exif_transpose(image)
+            if gray:
+                return np.asarray(image.convert("L")).copy()
+            return cv2.cvtColor(np.asarray(image.convert("RGB")), cv2.COLOR_RGB2BGR)
+    except Exception:  # noqa: BLE001 - a file that will not decode is a fact
+        return None
+
+
 def needs_rendering(path: str) -> bool:
     """True for a file a browser cannot show as-is although its extension
     suggests it can -- a CgBI PNG -- or one it cannot show at all, a GPU
