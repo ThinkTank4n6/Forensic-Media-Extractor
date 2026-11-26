@@ -4,6 +4,28 @@ The release number is in `VERSION` and is reported by both GUIs, the console
 banner, and the Project VIC and LAVA exports, so a report can be traced back
 to the build that produced it.
 
+## v2026.11.342 — Every file checked out exactly as committed, on Windows too
+
+FME had no `.gitattributes`, so Git on Windows -- the examiner's clone, and
+GitHub's Windows runner that builds the .exe -- turned LF line endings into
+CRLF on checkout. Python runs the files the same either way, but two
+promises were broken:
+
+- **The vendored readers were not byte-identical to what was published.**
+  `fme/vendor/vendored.json` records each one's SHA-256, and
+  `tests/test_vendor.py` checks them -- on Linux only, where nothing is
+  converted. The .exe carried CRLF copies.
+- **The code fingerprint differed by platform.** `fme version` prints a
+  SHA-256 over the code so two examiners can tell they are running the same
+  program. The .exe's was taken over the Windows runner's CRLF checkout;
+  the same release run from source on Linux or a Mac, or from the release
+  zip, gave a different one.
+
+`.gitattributes` now says `* -text`: no conversion, anywhere.
+`tests/test_vendor.py` fails without it. The Windows test workflow, which
+would have shown this, runs only on pull requests or by hand. Found while
+building the DVR Forensic Extractor, which vendors the same readers.
+
 ## v2026.11.341 — Every picture feature reads what the gallery shows: HEIC, Apple textures, CgBI PNGs
 
 GitHub's Python 3.11 job failed the button sweep (`test_ui_sweep`) on

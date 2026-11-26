@@ -1,0 +1,11 @@
+# Every file is checked out exactly as it was committed -- no line-ending
+# conversion, on Windows or anywhere (v2026.11.342).
+#
+# Git on Windows, GitHub's Windows runners included, turns LF into CRLF on
+# checkout by default. That broke two promises: the vendored readers in
+# fme/vendor/ are meant to be byte-identical to what was published (their
+# hashes are in fme/vendor/vendored.json), and `fme version` prints a
+# fingerprint of the code so two examiners can tell they run the same
+# program -- but the Windows build fingerprinted CRLF copies, so the same
+# release gave one fingerprint from the .exe and another from source.
+* -text

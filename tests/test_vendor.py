@@ -71,6 +71,20 @@ for entry in record:
 # one edit that actually breaches the terms. A file that never carried one
 # is covered by the licence text shipped beside it, and the holder is
 # recorded either way, so nobody has to go looking.
+print("\nand stays what the record says on a Windows checkout too")
+# Git on Windows -- GitHub's Windows runner, which builds the .exe, among
+# them -- turns LF into CRLF on checkout unless told not to. The hashes
+# above then hold only on Linux, where this test runs, and the .exe carried
+# CRLF copies and fingerprinted them (v2026.11.342).
+attributes = os.path.join(PROJECT, ".gitattributes")
+rules = []
+if os.path.isfile(attributes):
+    with open(attributes, encoding="utf-8") as fh:
+        rules = [line.split() for line in fh if line.strip() and not line.startswith("#")]
+kept = ["*", "-text"] in rules
+ok &= kept
+print(f"  .gitattributes checks every file out as committed (* -text): {kept}")
+
 print("\nthe copyright notice is kept with each file")
 for entry in record:
     if not entry["path"].endswith(".py"):
